@@ -54,8 +54,8 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
         g_lark_mark = 0;
         return false;
     }
-    static final String MODULE_VERSION = "1.8.5";
-    static final int MODULE_VERSION_CODE = 27;   // 与 AndroidManifest versionCode 同步; 更新检查比对用
+    static final String MODULE_VERSION = "1.8.6";
+    static final int MODULE_VERSION_CODE = 28;   // 与 AndroidManifest versionCode 同步; 更新检查比对用
     static final String MAPPER = "ax2.b";
 
     // 签名自校验: 运行 APK 的证书 SHA-256(=SHA256(signature.toByteArray()))。重打包必须重签名 -> 证书变 -> 检测到篡改。
@@ -543,6 +543,8 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
             AccountPaths.bind(null, PKG);
             File acc = AccountPaths.accountRoot(null, PKG, AccountPaths.currentUid);
             acc.mkdirs();
+            // ≤1.8.1 的全局路径旧数据(全员档案/离职名单/消息存档)并入账号目录, 否则被新账号文件遮蔽读不到
+            AccountPaths.migrateLegacy(acc);
             nativeSetDataDir(acc.getAbsolutePath());
         } catch (Throwable t) {
             try { nativeSetDataDir(filesDir.getAbsolutePath()); } catch (Throwable ignored) {}

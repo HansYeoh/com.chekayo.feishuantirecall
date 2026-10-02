@@ -2,6 +2,8 @@ package com.chekayo.feishuantirecall;
 
 import android.content.Context;
 
+import org.json.JSONObject;
+
 import java.io.File;
 
 /**
@@ -126,6 +128,109 @@ public final class AccountPaths {
             }
         } catch (Throwable ignored) { }
         return new File("/data/data/" + (pkg == null ? currentPkg : pkg) + "/files/resign_tracker/" + name);
+    }
+
+    /**
+     * 旧数据迁移（一次性，幂等）：v1.8.2 起数据按账号目录隔离，但更早版本（≤1.8.1）的数据
+     * 留在全局路径 files/ 与 files/resign_tracker/，升级后账号目录里的新文件会在读路径上
+     * 「遮蔽」旧数据 —— 表现为全员档案缺部门/工号、离职名单与后台消息存档为空。
+     * 这里把旧数据并入当前账号目录：JSON 按顶层 key 并集（保留账号目录新值），文本旧内容前置。
+     * marker 文件保证只跑一次；账号目录已有数据不会丢。
+     */
+    public static void migrateLegacy(File base) {
+        try {
+            if (base == null || !base.isDirectory()) return;
+            File marker = new File(base, ".legacy_migrated");
+            if (marker.exists()) return;
+            File files = base.getParentFile() != null ? base.getParentFile().getParentFile() : null; // files/
+            if (files == null || !files.isDirectory()) return;
+            File accResign = new File(base, "resign_tracker");
+            File gResign = new File(files, "resign_tracker");
+            mergeJsonOne(new File(gResign, "profiles.json"), new File(accResign, "profiles.json"));
+            mergeJsonOne(new File(gResign, "resigned_all.json"), new File(accResign, "resigned_all.json"));
+            copyIfMissing(new File(gResign, "resigned_latest.json"), new File(accResign, "resigned_latest.json"));
+            prependOne(new File(files, "notif_archive.txt"), new File(base, "notif_archive.txt"));
+            prependOne(new File(files, "leave_log.txt"), new File(base, "leave_log.txt"));
+            File[] top = files.listFiles();
+            if (top != null) for (File k : top) {
+                String n = k.getName();
+                if (k.isFile() && n.startsWith("kicked_") && n.endsWith(".txt")) copyIfMissing(k, new File(base, n));
+            }
+            marker.createNewFile();
+            android.util.Log.i("fucklark", "AccountPaths.migrateLegacy done -> " + base);
+        } catch (Throwable t) {
+            android.util.Log.w("fucklark", "migrateLegacy err " + t);
+        }
+    }
+
+    /** 账号目录缺文件 → 复制；两边都有 → 按顶层 key 并集合并（保留账号目录已有值）。 */
+    private static void mergeJsonOne(File legacy, File cur) {
+        try {
+            if (!legacy.isFile() || legacy.length() == 0) return;
+            JSONObject lo = new JSONObject(new String(readAll(legacy), "UTF-8"));
+            JSONObject co = (cur.isFile() && cur.length() > 0)
+                    ? new JSONObject(new String(readAll(cur), "UTF-8")) : new JSONObject();
+            boolean changed = false;
+            java.util.Iterator<String> it = lo.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                if (!co.has(k)) { co.put(k, lo.get(k)); changed = true; }
+            }
+            if (!changed && cur.isFile() && cur.length() > 0) return;
+            File p = cur.getParentFile();
+            if (p != null && !p.isDirectory()) p.mkdirs();
+            File tmp = new File(p, cur.getName() + ".mig.tmp");
+            java.io.FileOutputStream out = new java.io.FileOutputStream(tmp);
+            out.write(co.toString(1).getBytes("UTF-8"));
+            out.close();
+            if (cur.exists()) cur.delete();
+            if (!tmp.renameTo(cur)) copy(tmp, cur);
+            tmp.delete();
+        } catch (Throwable ignored) { }
+    }
+
+    /** 账号目录缺文件 → 复制；两边都有 → 旧内容接在前面（仅迁移时跑一次）。 */
+    private static void prependOne(File legacy, File cur) {
+        try {
+            if (!legacy.isFile() || legacy.length() == 0) return;
+            if (!cur.isFile() || cur.length() == 0) { copyIfMissing(legacy, cur); return; }
+            byte[] l = readAll(legacy), o = readAll(cur);
+            java.io.FileOutputStream out = new java.io.FileOutputStream(cur);
+            out.write(l);
+            if (l.length > 0 && l[l.length - 1] != '\n') out.write('\n');
+            out.write(o);
+            out.close();
+        } catch (Throwable ignored) { }
+    }
+
+    private static void copyIfMissing(File src, File dst) {
+        try {
+            if (!src.isFile() || dst.exists()) return;
+            File p = dst.getParentFile();
+            if (p != null && !p.isDirectory()) p.mkdirs();
+            copy(src, dst);
+        } catch (Throwable ignored) { }
+    }
+
+    private static void copy(File src, File dst) {
+        try {
+            java.io.FileInputStream in = new java.io.FileInputStream(src);
+            java.io.FileOutputStream out = new java.io.FileOutputStream(dst);
+            byte[] b = new byte[8192];
+            int n;
+            while ((n = in.read(b)) > 0) out.write(b, 0, n);
+            in.close();
+            out.close();
+        } catch (Throwable ignored) { }
+    }
+
+    private static byte[] readAll(File f) throws Exception {
+        java.io.FileInputStream is = new java.io.FileInputStream(f);
+        byte[] b = new byte[(int) f.length()];
+        int off = 0, r;
+        while (off < b.length && (r = is.read(b, off, b.length - off)) > 0) off += r;
+        is.close();
+        return b;
     }
 
     /** 消息类文件（通知存档/退群日志等）按账号路径。 */

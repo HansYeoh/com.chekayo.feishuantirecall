@@ -134,6 +134,9 @@ public class ResignTracker implements IXposedHookLoadPackage, IXposedHookZygoteI
                         File outDir = com.chekayo.feishuantirecall.AccountPaths.resignDir(appCtx, PKG,
                                 com.chekayo.feishuantirecall.AccountPaths.currentUid);
                         if (outDir != null && !outDir.isDirectory()) outDir.mkdirs();
+                        // 切号后新账号目录首次使用时也迁移一次旧全局数据(幂等, 有 marker)
+                        try { com.chekayo.feishuantirecall.AccountPaths.migrateLegacy(outDir.getParentFile()); }
+                        catch (Throwable me) { XposedBridge.log(TAG + ": migrateLegacy err " + me); }
 
                         File accAll = new File(outDir, "resigned_all.json");
                         File accSnap = new File(outDir, "resigned_latest.json");

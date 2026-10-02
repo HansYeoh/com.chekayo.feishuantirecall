@@ -71,11 +71,23 @@ public final class ArchiveSync {
                 "com.ss.android.lark",
                 "com.larksuite.suite"
         };
+        String[] uids = { AccountPaths.currentUid, AccountPaths.FALLBACK_UID };
         for (String pkg : pkgs) {
             if (pkg == null || pkg.isEmpty()) continue;
+            // v1.8.2+ 按账号隔离: 档案在 accounts/<uid>/resign_tracker/, 存档文本直接在 accounts/<uid>/
+            for (String u : uids) {
+                if (u == null || u.isEmpty()) continue;
+                File f = new File("/data/data/" + pkg + "/files/accounts/" + u + "/" + name);
+                if (f.exists()) return f;
+                f = new File("/data/user/0/" + pkg + "/files/accounts/" + u + "/" + name);
+                if (f.exists()) return f;
+            }
+            // 旧全局路径兜底(迁移前/迁移失败时)
             File f = new File("/data/data/" + pkg + "/files/resign_tracker/" + name);
             if (f.exists()) return f;
             f = new File("/data/user/0/" + pkg + "/files/resign_tracker/" + name);
+            if (f.exists()) return f;
+            f = new File("/data/data/" + pkg + "/files/" + name);   // notif_archive.txt / leave_log.txt 全局根
             if (f.exists()) return f;
         }
         return null;
