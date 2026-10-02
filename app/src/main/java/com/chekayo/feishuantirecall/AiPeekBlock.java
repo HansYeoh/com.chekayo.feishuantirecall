@@ -19,12 +19,11 @@ import de.robv.android.xposed.XposedHelpers;
  *   - 聊天列表右下角「N 条新消息」跳转钮（resource-id new_messages_*）
  *   - 设置项「屏蔽消息速览」「显示 AI 速览」
  *
- * 【实现】真机锚点：文案以「消息速览」开头；控件
- *   com.ss.android.lark.knowledgeai.cell.cot.ShineTextView（版本漂移时文案兜底）。
- * 三层拦截：
- *   1) ViewGroup.addView    —— 浮层根/小壳在挂树前拦掉
- *   2) View.setVisibility   —— 仅对「速览节点本身 / 小提示条」强制 GONE（不误伤大容器）
- *   3) TextView.setText     —— 命中后清空文案 + 向上收壳，杜绝空框与反复重绘
+ * 【实现】锚点：文案以「消息速览」开头（不靠类名，ShineTextView 在搜索 AI 卡片里也用）。
+ * 两层拦截：
+ *   1) ViewGroup.addView    —— 仅拦已确认含「消息速览」文案的节点（addView 时已有文案才拦）
+ *   2) View.setVisibility   —— 对已被 hideTipShell 标记的节点强制 GONE
+ *   3) TextView.setText     —— 文案命中「消息速览」后清字 + 向上收壳（主路径）
  *
  * 开关：Config.blockaipeek（默认开），设置面板「屏蔽消息速览」。
  */
@@ -60,8 +59,8 @@ public final class AiPeekBlock {
                         if (!Config.blockaipeek) return;
                         if (p.args == null || !(p.args[0] instanceof View)) return;
                         View child = (View) p.args[0];
-                        // 只拦「速览节点 / 小壳」，绝不因大树里夹带速览而丢掉整页
-                        if (isPeekNode(child) || (looksLikeTipShell(child) && subtreeHasPeekText(child, 0))) {
+                        // 只拦确认是速览节点本身（含 peek 类名/文案）；shell 隐藏由 setText→hideTipShell 负责
+                        if (isPeekNode(child)) {
                             markBlocked(child);
                             hit("addView", "拦下浮层 class=" + child.getClass().getName());
                             p.setResult(null);
@@ -88,8 +87,8 @@ public final class AiPeekBlock {
                         int vis = (Integer) p.args[0];
                         if (vis != View.VISIBLE) return;
                         View v = (View) p.thisObject;
-                        boolean block = isBlocked(v) || isPeekNode(v)
-                                || (looksLikeTipShell(v) && subtreeHasPeekText(v, 0));
+                        // 仅拦已被 hideTipShell 标记的节点（由 setText 文案命中后标记）
+                        boolean block = isBlocked(v);
                         if (!block) return;
                         markBlocked(v);
                         hit("setVisibility", "强制GONE class=" + v.getClass().getName());
@@ -115,7 +114,7 @@ public final class AiPeekBlock {
                         }
                         if (src == null) return;
                         String s = src.toString();
-                        if (!isPeekText(s) && !isPeekNode((View) p.thisObject)) return;
+                        if (!isPeekText(s)) return;
                         TextView tv = (TextView) p.thisObject;
                         if (BUSY.contains(tv)) return;
                         BUSY.add(tv);
@@ -151,14 +150,13 @@ public final class AiPeekBlock {
         return s.trim().startsWith("消息速览");
     }
 
-    /** 类名锚点（真机验证）：knowledgeai / CoT / ShineTextView。 */
+    /**
+     * 类名锚点：已确认 ShineTextView 同时用于搜索 AI 卡片（AIRoundViewImpl2），
+     * 不能作为全局拦截依据；.cot. 包亦同理。
+     * 所有拦截均改为文案锚点（isPeekText），此方法保留但始终返回 false。
+     */
     static boolean isPeekClass(View v) {
-        try {
-            String n = v.getClass().getName();
-            return n.contains("knowledgeai") || n.contains("ShineTextView") || n.contains(".cot.");
-        } catch (Throwable t) {
-            return false;
-        }
+        return false;
     }
 
     /** 是否速览节点本身（文案或类名命中），不含「大树里夹带」。 */
@@ -251,7 +249,7 @@ public final class AiPeekBlock {
             } catch (Throwable ignored) {}
 
             ViewGroup.LayoutParams lp = v.getLayoutParams();
-            if (lp == null) return true;
+            if (lp == null) return false;   // 未附到父容器的 view 无法判断尺寸，保守跳过
             int h = lp.height;
             int w = lp.width;
             if (h == ViewGroup.LayoutParams.MATCH_PARENT) return false;
