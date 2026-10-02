@@ -35,3 +35,4 @@ __pycache__/
 
 # 本地构建工具缓存(build.ps1 用, 勿提交)
 tools/r8.jar
+.zcodeignore
