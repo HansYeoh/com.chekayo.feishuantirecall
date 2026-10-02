@@ -151,11 +151,12 @@ public final class AiPeekBlock {
         return s.trim().startsWith("消息速览");
     }
 
-    /** 类名锚点（真机验证）：knowledgeai / CoT / ShineTextView。 */
+    /** 类名锚点：仅匹配速览浮层专用类（ShineTextView / .cot. 包）。
+     *  knowledgeai 包下还有搜索 AI 卡片组件（RoundListRecyclerView 等），不能整包拦截。 */
     static boolean isPeekClass(View v) {
         try {
             String n = v.getClass().getName();
-            return n.contains("knowledgeai") || n.contains("ShineTextView") || n.contains(".cot.");
+            return n.contains("ShineTextView") || n.contains(".cot.");
         } catch (Throwable t) {
             return false;
         }
