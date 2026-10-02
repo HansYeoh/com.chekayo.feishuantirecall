@@ -60,8 +60,8 @@ public final class AiPeekBlock {
                         if (!Config.blockaipeek) return;
                         if (p.args == null || !(p.args[0] instanceof View)) return;
                         View child = (View) p.args[0];
-                        // 只拦「速览节点 / 小壳」，绝不因大树里夹带速览而丢掉整页
-                        if (isPeekNode(child) || (looksLikeTipShell(child) && subtreeHasPeekText(child, 0))) {
+                        // 只拦确认是速览节点本身（含 peek 类名/文案）；shell 隐藏由 setText→hideTipShell 负责
+                        if (isPeekNode(child)) {
                             markBlocked(child);
                             hit("addView", "拦下浮层 class=" + child.getClass().getName());
                             p.setResult(null);
@@ -88,8 +88,8 @@ public final class AiPeekBlock {
                         int vis = (Integer) p.args[0];
                         if (vis != View.VISIBLE) return;
                         View v = (View) p.thisObject;
-                        boolean block = isBlocked(v) || isPeekNode(v)
-                                || (looksLikeTipShell(v) && subtreeHasPeekText(v, 0));
+                        // isBlocked: 已被 hideTipShell 标记的 shell；isPeekNode: 速览节点本身
+                        boolean block = isBlocked(v) || isPeekNode(v);
                         if (!block) return;
                         markBlocked(v);
                         hit("setVisibility", "强制GONE class=" + v.getClass().getName());
@@ -251,7 +251,7 @@ public final class AiPeekBlock {
             } catch (Throwable ignored) {}
 
             ViewGroup.LayoutParams lp = v.getLayoutParams();
-            if (lp == null) return true;
+            if (lp == null) return false;   // 未附到父容器的 view 无法判断尺寸，保守跳过
             int h = lp.height;
             int w = lp.width;
             if (h == ViewGroup.LayoutParams.MATCH_PARENT) return false;
