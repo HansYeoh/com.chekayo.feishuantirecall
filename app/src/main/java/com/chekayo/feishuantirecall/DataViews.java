@@ -1078,7 +1078,27 @@ final class DataViews {
         } catch (Throwable t) { return null; }
     }
 
-    static String moduleVersion() { return "1.8.3"; }
+    /** 当前模块版本: 反射读 AntiRecall 权威源, 避免多处硬编码版本号漂移导致「检查更新」误报新版;
+     *  桌面进程 AntiRecall 若加载失败, 回退兜底值(发布时与 Manifest 同步)。 */
+    static String moduleVersion() {
+        try {
+            Class<?> c = Class.forName("com.chekayo.feishuantirecall.AntiRecall");
+            java.lang.reflect.Field f = c.getDeclaredField("MODULE_VERSION");
+            f.setAccessible(true);
+            Object v = f.get(null);
+            if (v != null) return String.valueOf(v);
+        } catch (Throwable ignored) {}
+        return "1.8.5";
+    }
 
-    static int moduleVersionCode() { return 24; }
+    static int moduleVersionCode() {
+        try {
+            Class<?> c = Class.forName("com.chekayo.feishuantirecall.AntiRecall");
+            java.lang.reflect.Field f = c.getDeclaredField("MODULE_VERSION_CODE");
+            f.setAccessible(true);
+            Object v = f.get(null);
+            if (v instanceof Integer) return (Integer) v;
+        } catch (Throwable ignored) {}
+        return 27;
+    }
 }
