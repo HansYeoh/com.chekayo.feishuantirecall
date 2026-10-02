@@ -36,3 +36,10 @@ __pycache__/
 # 本地构建工具缓存(build.ps1 用, 勿提交)
 tools/r8.jar
 .zcodeignore
+
+# 内部运维/取证工具 —— 只保留本地, 不入库(电报群值守 prompt 含内部流程/群ID, 水印工具公开即失效)
+scripts/tg_watch_prompt.md
+scripts/tg_poll.sh
+scripts/tg_release.sh
+scripts/wm_embed.py
+scripts/wm_extract.py
