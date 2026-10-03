@@ -288,15 +288,24 @@ if ($clangpp) {
   if ($LASTEXITCODE) { throw "ndk compile libresign failed" }
   "libresign.so = $([math]::Round((Get-Item "$build\libresign.so").Length/1KB,1))KB"
 } else {
-  Write-Host "`n== 0. (NDK 缺失) 复用发布版 APK 里的 libantirecall.so =="
-  $releaseApk = Join-Path $PROJ 'feishu-antirecall.apk'
-  if (-not (Test-Path $releaseApk)) { throw "NDK 未装且找不到 $releaseApk, 无法复用 so" }
+  Write-Host "`n== 0. (NDK 缺失) 复用发布版 APK 里的全部 native 库 (libantirecall.so + libresign.so 等) =="
+  # 注意: 构建产物与旧 APK 同名(feishu-antirecall.apk), 直接复用会在首次构建时覆盖掉原始 so。
+  #       优先用 tools/native-v163.apk(原始发布版快照), 没有才退回根目录 APK。
+  $releaseApk = Join-Path $PROJ 'tools\native-v163.apk'
+  if (-not (Test-Path $releaseApk)) { $releaseApk = Join-Path $PROJ 'feishu-antirecall.apk' }
+  if (-not (Test-Path $releaseApk)) { throw "NDK 未装且找不到 native 库来源(tools/native-v163.apk 或 feishu-antirecall.apk)" }
+  Write-Host "  so 来源: $releaseApk"
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   $src = [System.IO.Compression.ZipFile]::OpenRead($releaseApk)
   try {
-    $e = $src.GetEntry('lib/arm64-v8a/libantirecall.so')
-    if (-not $e) { throw "libantirecall.so not found in $releaseApk" }
-    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, "$build\libantirecall.so", $true)
+    # 提取 lib/arm64-v8a/ 下所有 .so: 漏掉任何一个(如 libresign.so)都会让对应功能线程启动即死
+    $soEntries = $src.Entries | Where-Object { $_.FullName -like 'lib/arm64-v8a/*.so' }
+    if (-not $soEntries) { throw "no .so under lib/arm64-v8a/ in $releaseApk" }
+    foreach ($e in $soEntries) {
+      $out = Join-Path $build (Split-Path -Leaf $e.FullName)
+      [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, $out, $true)
+      Write-Host "  复用 $($e.FullName) -> $out"
+    }
   } finally { $src.Dispose() }
 }
 "libantirecall.so = $([math]::Round((Get-Item "$build\libantirecall.so").Length/1KB,1))KB"

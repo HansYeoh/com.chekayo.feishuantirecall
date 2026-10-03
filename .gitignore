@@ -43,3 +43,4 @@ scripts/tg_poll.sh
 scripts/tg_release.sh
 scripts/wm_embed.py
 scripts/wm_extract.py
+tools/native-v163.apk

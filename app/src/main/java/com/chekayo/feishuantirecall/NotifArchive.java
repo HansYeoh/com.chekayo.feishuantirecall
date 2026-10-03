@@ -57,12 +57,19 @@ public class NotifArchive {
 
     public static void setFilesDir(File filesDir) {
         if (filesDir == null) return;
-        // 通知存档按登录账号隔离
+        // 通知存档按登录账号隔离。setFilesDir 在 handleLoadPackage 早期执行, 可能早于 AccountPaths.bind,
+        // 此处自行探测 uid(无 Context 也走 /data/data/<pkg> 路径), 否则 FILE 会固定到 accounts/unknown/
+        // 而迁移/桌面推送在 accounts/<uid>/ —— 写读分离导致「后台消息存档失效」。
         String uid = AccountPaths.currentUid;
+        if (uid == null || uid.isEmpty()) {
+            uid = AccountPaths.detectUid(null);
+            if (uid != null && !uid.isEmpty()) AccountPaths.currentUid = uid;
+        }
         if (uid == null || uid.isEmpty()) uid = AccountPaths.FALLBACK_UID;
         File acc = new File(filesDir, "accounts/" + AccountPaths.safeUid(uid));
         FILE = new File(acc, "notif_archive.txt");
         restoredFromFile = false;
+        try { android.util.Log.i("fucklark", "NotifArchive FILE=" + FILE); } catch (Throwable ignored) {}
     }
 
     /** 解析消息文件（读优先级：当前账号 → 其它账号 → 旧全局路径）。 */

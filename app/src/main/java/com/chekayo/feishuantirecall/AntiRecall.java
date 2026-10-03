@@ -54,8 +54,8 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
         g_lark_mark = 0;
         return false;
     }
-    static final String MODULE_VERSION = "1.8.7";
-    static final int MODULE_VERSION_CODE = 29;   // 与 AndroidManifest versionCode 同步; 更新检查比对用
+    static final String MODULE_VERSION = "1.8.8";
+    static final int MODULE_VERSION_CODE = 30;   // 与 AndroidManifest versionCode 同步; 更新检查比对用
     static final String MAPPER = "ax2.b";
 
     // 签名自校验: 运行 APK 的证书 SHA-256(=SHA256(signature.toByteArray()))。重打包必须重签名 -> 证书变 -> 检测到篡改。
@@ -179,6 +179,7 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
         try {
             File fdir = larkFilesDir();
             Config.setFilesDir(fdir);        // 每进程都设: 让 Config.notifarchive 能从磁盘读到
+            AccountPaths.currentPkg = PKG;   // 供 NotifArchive/AccountPaths 无 Context 探测 uid 用
             NotifArchive.setFilesDir(fdir);
             try { Config.loadAndAnnounce(); } catch (Throwable ignored) {}
             installNotifHook();
@@ -546,6 +547,8 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
             // ≤1.8.1 的全局路径旧数据(全员档案/离职名单/消息存档)并入账号目录, 否则被新账号文件遮蔽读不到
             AccountPaths.migrateLegacy(acc);
             nativeSetDataDir(acc.getAbsolutePath());
+            // bind 后 uid 已确定: 重指 NotifArchive FILE 到正确账号桶(早期 setFilesDir 可能落在 unknown 桶)
+            NotifArchive.setFilesDir(filesDir);
         } catch (Throwable t) {
             try { nativeSetDataDir(filesDir.getAbsolutePath()); } catch (Throwable ignored) {}
         }

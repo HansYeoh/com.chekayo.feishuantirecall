@@ -156,6 +156,21 @@ public final class AccountPaths {
                 String n = k.getName();
                 if (k.isFile() && n.startsWith("kicked_") && n.endsWith(".txt")) copyIfMissing(k, new File(base, n));
             }
+            // 救援 accounts/unknown/ 桶: 旧版本在 uid 未识别时把数据写进了 unknown, 并回正确账号目录
+            File unk = new File(files, "accounts/" + FALLBACK_UID);
+            if (unk.isDirectory() && !new File(unk, ".legacy_migrated").exists()) {
+                File unkResign = new File(unk, "resign_tracker");
+                mergeJsonOne(new File(unkResign, "profiles.json"), new File(accResign, "profiles.json"));
+                mergeJsonOne(new File(unkResign, "resigned_all.json"), new File(accResign, "resigned_all.json"));
+                prependOne(new File(unk, "notif_archive.txt"), new File(base, "notif_archive.txt"));
+                prependOne(new File(unk, "leave_log.txt"), new File(base, "leave_log.txt"));
+                File[] uk = unk.listFiles();
+                if (uk != null) for (File k : uk) {
+                    String n = k.getName();
+                    if (k.isFile() && n.startsWith("kicked_") && n.endsWith(".txt")) copyIfMissing(k, new File(base, n));
+                }
+                try { new File(unk, ".legacy_migrated").createNewFile(); } catch (Throwable ignored) {}
+            }
             marker.createNewFile();
             android.util.Log.i("fucklark", "AccountPaths.migrateLegacy done -> " + base);
         } catch (Throwable t) {
