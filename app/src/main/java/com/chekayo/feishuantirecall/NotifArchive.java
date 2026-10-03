@@ -36,6 +36,8 @@ public class NotifArchive {
     // 近期消息缓冲(内存, 不落盘)
     static final int BUF = 80;
     static final long BUF_WINDOW = 10 * 60 * 1000L;   // 10 分钟
+    /** 还原表时效: 只认 30 分钟内的条目, 防止旧存档原文被当成新撤回的消息显示。 */
+    static final long RESTORE_WINDOW_MS = 30 * 60 * 1000L;
     static final java.util.ArrayList<String[]> recent = new java.util.ArrayList<String[]>();  // {timeMs, sender, body}
     static volatile String lastSaved = "";
     static volatile long   lastSavedTime = 0;
@@ -140,17 +142,56 @@ public class NotifArchive {
     }
 
     /**
-     * 按发送人查可还原的撤回原文（严格匹配）。
+     * 按发送人查可还原的撤回原文（严格匹配 + 30 分钟时效）。
      * sender 为空或对不上 → null，禁止用「存档里最近一条」去顶提示/还原。
+     * 时效: 还原表条目只在 RESTORE_WINDOW_MS 内有效 —— 前台聊天里的撤回不产生通知、
+     * 不会写入还原表, 若无时效会命中该发送人更早的存档原文, 把旧消息当成本次撤回原文显示。
      */
     public static synchronized String findRestore(String sender) {
+        return findRestore(sender, System.currentTimeMillis());
+    }
+
+    public static synchronized String findRestore(String sender, long nowMs) {
         try {
             if (!restoredFromFile) loadRestoreFromArchive();
             if (sender == null || sender.trim().isEmpty()) return null;
             String[] hit = restoreMap.get(sender.trim());
-            if (hit != null && hit[0] != null && !hit[0].isEmpty()) return hit[0];
+            if (hit != null && hit.length >= 2 && hit[0] != null && !hit[0].isEmpty()) {
+                long ts = parseRestoreTs(hit[1]);
+                if (ts > 0) {
+                    long age = nowMs - ts;
+                    if (age <= RESTORE_WINDOW_MS && age >= -60000L) return hit[0];
+                }
+            }
         } catch (Throwable ignored) {}
         return null;
+    }
+
+    /** 还原条目时间戳: 兼容 毫秒 / "yyyy-MM-dd HH:mm:ss" / "MM-dd HH:mm:ss"(补当前年)。解析不了返回 0。 */
+    static long parseRestoreTs(String s) {
+        if (s == null) return 0;
+        String t = s.trim();
+        try { return Long.parseLong(t); } catch (Throwable ignored) {}
+        try {
+            SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
+            f.setLenient(false);
+            java.util.Date d = f.parse(t, new java.text.ParsePosition(0));
+            if (d != null) return d.getTime();
+        } catch (Throwable ignored) {}
+        try {
+            synchronized (TS) {
+                java.util.Date d = TS.parse(t, new java.text.ParsePosition(0));
+                if (d != null) {
+                    java.util.Calendar c = java.util.Calendar.getInstance();
+                    c.setTime(d);
+                    c.set(java.util.Calendar.YEAR, java.util.Calendar.getInstance().get(java.util.Calendar.YEAR));
+                    long ms = c.getTimeInMillis();
+                    if (ms > System.currentTimeMillis() + 2L * 86400000L) ms -= 365L * 86400000L;  // 跨年存档回退一年
+                    return ms;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return 0;
     }
 
     /** 首次查还原时，从存档文件回灌最近记录（进程重启后仍可还原）。 */
@@ -170,8 +211,9 @@ public class NotifArchive {
                 if (p.length < 3) continue;
                 String sender = p[1].trim();
                 String body = p[2].trim();
-                if (!sender.isEmpty() && !body.isEmpty()) {
-                    restoreMap.put(sender, new String[]{ body, p[0] });
+                long ms = parseRestoreTs(p[0]);
+                if (!sender.isEmpty() && !body.isEmpty() && ms > 0) {
+                    restoreMap.put(sender, new String[]{ body, Long.toString(ms) });
                 }
             }
         } catch (Throwable ignored) {}
