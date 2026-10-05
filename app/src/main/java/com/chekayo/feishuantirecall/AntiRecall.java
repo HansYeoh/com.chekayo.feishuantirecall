@@ -9,12 +9,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
-import de.robv.android.xposed.IXposedHookZygoteInit;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
 /**
  * 飞书防撤回 (com.ss.android.lark) —— 双层方案
@@ -26,13 +23,16 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
  *    安装动作由 Java 线程轮询 native tryInstall() 完成 (避免 raw pthread 上 PLT 惰性解析崩溃)。
  *
  * 2) Java 映射器层 (ax2.b.a): 打开聊天时把被撤回的 Content 顶回 + status 还原, 兜底。
+ *
+ * 生命周期: 不再实现 legacy 入口接口, 由唯一 modern 入口 FeishuKitModule 在
+ * onPackageReady 调 {@link #install} 完成完整分发(幂等在入口层)。
  */
-public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit {
+public class AntiRecall {
 
-    // 支持的目标包: 国内版飞书 + 国际版 Lark。LSPosed 按 xposedscope 列表注入对应进程。
+    // 支持的目标包: 国内版飞书 + 国际版 Lark。LSPosed 按 scope.list 注入对应进程。
     static final String PKG_FEISHU = "com.ss.android.lark";
     static final String PKG_LARK = "com.larksuite.suite";   // 国际版(Google Play), v7.72.10 真机确认
-    // 运行时当前注入的目标包名 (handleLoadPackage 入口锁定, 进程内唯一)。
+    // 运行时当前注入的目标包名 (FeishuKitModule 分发 install 时锁定, 进程内唯一)。
     // dataDir/getPackageInfo/主进程判断都用它, 国内/国际版同代码自适应, 无需为国际版另开分支。
     static volatile String PKG = PKG_FEISHU;
     static boolean isLarkFamily(String pkg) {
@@ -98,10 +98,8 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
     /** JNI: 设当前目标包的 files 目录(国内/国际版自适应), native 据此拼日志/kicked/leave 路径。 */
     public static native void nativeSetDataDir(String dir);
 
-    @Override
-    public void initZygote(IXposedHookZygoteInit.StartupParam sp) {
-        MODULE_PATH = sp.modulePath;
-    }
+    /** 供 ModulePath 在 onModuleLoaded 阶段回写模块 APK 路径(legacy 由 initZygote 设置)。 */
+    public static void setModulePath(String path) { MODULE_PATH = path; }
 
     static volatile boolean CONFIG_BRIDGE_INSTALLED = false;
 
@@ -162,18 +160,21 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
                 c.registerReceiver(receiver, syncFilter);
             }
             XposedBridge.log("[fucklark] config bridge bound pkg=" + c.getPackageName());
-            // Context 就绪后再与模块权威源对齐一次（handleLoadPackage 早期可能 context 还是 null）
+            // Context 就绪后再与模块权威源对齐一次（install 分发早期可能 context 还是 null）
             try { Config.loadAndAnnounce(); } catch (Throwable ignored) {}
         } catch (Throwable t) {
             XposedBridge.log("[fucklark] config bridge bind failed: " + t);
         }
     }
 
-    @Override
-    public void handleLoadPackage(LoadPackageParam lpparam) {
-        installConfigBridge();
-        if (!isLarkFamily(lpparam.packageName) && !isLarkApp(lpparam.classLoader)) return;
-        PKG = lpparam.packageName;   // 锁定当前目标(进程内唯一), 下游 dataDir/getPackageInfo 随之自适应
+    /**
+     * 完整功能安装。唯一分发点: FeishuKitModule.onPackageReady(已按国内/国际/白标过滤并
+     * 保证幂等)。跨进程配置桥不在此装——它要对任意注入进程生效(legacy 先于包名过滤),
+     * 由入口在过滤前调用 {@link #installConfigBridge}。
+     */
+    public static void install(String packageName, ClassLoader classLoader) {
+        if (!isLarkFamily(packageName) && !isLarkApp(classLoader)) return;
+        PKG = packageName;   // 锁定当前目标(进程内唯一), 下游 dataDir/getPackageInfo 随之自适应
 
         // ---- 0) 后台消息存档: hook 通知抓正文(所有飞书进程都装) ----
         // 通知可能由主进程或 :wschannel 进程弹 -> 每个进程各自 hook + 各自读同一份配置(同 UID 私有目录)。
@@ -194,13 +195,13 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
         try { AiPeekBlock.install(); } catch (Throwable t) { XposedBridge.log("[fucklark] ai peek init failed: " + t); }
 
         // ---- 0.6) 解除文件/图片下载限制: 加密聊天禁另存 -> 强制放行(按签名定位, 抗混淆) ----
-        try { FileDownloadUnlock.install(lpparam.classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] download unlock init failed: " + t); }
+        try { FileDownloadUnlock.install(classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] download unlock init failed: " + t); }
 
         // ---- 0.65) 解除「保密模式」复制/转发限制: RestrictedMode 门禁拦截器 -> 全放行(按签名定位, 抗混淆) ----
-        try { RestrictedModeUnlock.install(lpparam.classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] restricted-mode unlock init failed: " + t); }
+        try { RestrictedModeUnlock.install(classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] restricted-mode unlock init failed: " + t); }
 
         // ---- 0.7) 主页顶部更新横幅: hook MainActivity.onResume, 有新版时注入横幅 ----
-        try { UpdateBanner.install(lpparam.classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] update banner init failed: " + t); }
+        try { UpdateBanner.install(classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] update banner init failed: " + t); }
 
         // ---- 0.8) 下载文件另存到系统「下载」: 主进程监听 Lark/download, 写完即 MediaStore 复制到公共 Download ----
         try {
@@ -221,7 +222,7 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
         // 主路径 com.ss.android.lark.im.sdk.service.ImSdkMessageServiceImplV2.readMessageForChannel ->
         //   rustclient jk(UPDATE_MESSAGES_ME_READ, UpdateMessagesMeReadRequest{message_ids,max_position,...}).
         // pb 类名 com.bytedance.lark.pb.im.v1.UpdateMessagesMeReadRequest 稳定未混淆.
-        try { installAntiRead2(lpparam.classLoader); } catch (Throwable t) { alog("antiread2 install failed: " + t); }
+        try { installAntiRead2(classLoader); } catch (Throwable t) { alog("antiread2 install failed: " + t); }
 
         // ---- 2) Java 映射器兜底 (版本自适应) ----
         // 旧版飞书(≤7.70): 映射器 ax2.b.a(Object,int) 存在 -> 沿用【之前的方法】hook 它,
@@ -229,7 +230,7 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
         // 新版飞书(≥7.71): 混淆器把短名 ax2.b 重排成无关类(Glide Headers), 该方法不存在
         //   -> 走【新方式】: 仅依赖 native SQL 层(已在 7.71.8 真机验证撤回原文保留)。
         // findMethodExactIfExists 只探测不抛异常, 据此路由, 不再对新版误报 NoSuchMethodError。
-        ClassLoader cl = lpparam.classLoader;
+        ClassLoader cl = classLoader;
         boolean legacyMapper = false;
         try {
             // 标准反射探测: 旧版存在 ax2.b.a(Object,int); 新版该短名被重排, 探测失败.
@@ -503,7 +504,7 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
 
     static synchronized void startNative() throws Exception {
         if (NATIVE_STARTED) return;
-        if (MODULE_PATH == null) throw new IllegalStateException("module path null (initZygote not called)");
+        if (MODULE_PATH == null) throw new IllegalStateException("module path null (ModulePath not applied)");
 
         File dataDir = null;
         for (String d : new String[]{"/data/data/" + PKG, "/data/user/0/" + PKG}) {

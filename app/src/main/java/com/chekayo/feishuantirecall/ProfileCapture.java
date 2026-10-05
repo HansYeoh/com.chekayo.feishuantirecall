@@ -21,18 +21,19 @@ import java.util.Set;
 
 import org.json.JSONObject;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
 /**
  * FeishuKit「开资料页即归档」——V3 资料页是 section 分块渲染, 数据不走 entity.Profile,
  * 所以直接抓页面渲染出的 UI 文本(部门/企业邮箱/直属上级/职务/工号/手机号), 按 label→value 配对,
  * 连同 uid(从 Activity intent 取)存进 profiles.json。你打开过谁的资料就存谁, 离职后归档仍在。
+ *
+ * 生命周期: 不再实现 legacy 入口接口, 由唯一 modern 入口 FeishuKitModule 在
+ * onPackageReady 调 {@link #install} 分发。
  */
-public class ProfileCapture implements IXposedHookLoadPackage {
+public class ProfileCapture {
 
     static final String PKG_FEISHU = "com.ss.android.lark";
     static final String PKG_LARK = "com.larksuite.suite";   // 国际版应用包名(内部类名仍沿用 com.ss.android.lark.* 前缀)
@@ -40,7 +41,7 @@ public class ProfileCapture implements IXposedHookLoadPackage {
     static boolean isLarkFamily(String pkg) { return PKG_FEISHU.equals(pkg) || PKG_LARK.equals(pkg); }
     // UserProfileActivityV3 国际版 dex 实测同样保留, 类名不用改
     static final String ACT = "com.ss.android.lark.profile.func.v3.userprofile.UserProfileActivityV3";
-    static volatile File OUT;   // handleLoadPackage 按当前目标包设(/data/data/<应用包名>/files/resign_tracker/)
+    static volatile File OUT;   // install 按当前目标包设(/data/data/<应用包名>/files/resign_tracker/)
 
     // label 文本 -> 输出字段
     static String labelKey(String t) {
@@ -58,15 +59,15 @@ public class ProfileCapture implements IXposedHookLoadPackage {
     static final Set<String> CHROME = new HashSet<String>(Arrays.asList(
             "消息", "语音", "视频", "编辑内容", "显示", "备注与描述", "添加描述", "更多", "复制"));
 
-    @Override
-    public void handleLoadPackage(LoadPackageParam lpparam) {
-        if (!isLarkFamily(lpparam.packageName) && !AntiRecall.isLarkApp(lpparam.classLoader)) return;
-        PKG = lpparam.packageName;
+    /** 完整功能安装。唯一分发点: FeishuKitModule.onPackageReady(已过滤国内/国际/白标)。 */
+    public static void install(String packageName, ClassLoader classLoader) {
+        if (!isLarkFamily(packageName) && !AntiRecall.isLarkApp(classLoader)) return;
+        PKG = packageName;
         // 按当前飞书账号隔离 profiles.json
         try { AccountPaths.bind(null, PKG); } catch (Throwable ignored) {}
         OUT = AccountPaths.accountFile(null, PKG, AccountPaths.currentUid, "resign_tracker/profiles.json");
         try {
-            XposedHelpers.findAndHookMethod(ACT, lpparam.classLoader, "onCreate", Bundle.class, new XC_MethodHook() {
+            XposedHelpers.findAndHookMethod(ACT, classLoader, "onCreate", Bundle.class, new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
                     final Activity act = (Activity) param.thisObject;
                     // section 数据异步加载, 排几次延时抓取(幂等, 只在抓到字段时存)

@@ -57,7 +57,7 @@ public class NotifArchive {
 
     public static void setFilesDir(File filesDir) {
         if (filesDir == null) return;
-        // 通知存档按登录账号隔离。setFilesDir 在 handleLoadPackage 早期执行, 可能早于 AccountPaths.bind,
+        // 通知存档按登录账号隔离。setFilesDir 在 install 分发早期执行, 可能早于 AccountPaths.bind,
         // 此处自行探测 uid(无 Context 也走 /data/data/<pkg> 路径), 否则 FILE 会固定到 accounts/unknown/
         // 而迁移/桌面推送在 accounts/<uid>/ —— 写读分离导致「后台消息存档失效」。
         String uid = AccountPaths.currentUid;

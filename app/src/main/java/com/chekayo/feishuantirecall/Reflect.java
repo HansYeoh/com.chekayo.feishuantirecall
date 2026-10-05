@@ -250,15 +250,6 @@ public final class Reflect {
         }
     }
 
-    /** 写静态字段（ModulePath 写 AntiRecall/ResignTracker 的 MODULE_PATH 用；字段可跨包 package-private）。 */
-    public static void setStaticObjectField(Class<?> clazz, String fieldName, Object value) {
-        try {
-            findField(clazz, fieldName).set(null, value);
-        } catch (IllegalAccessException e) {
-            throw new IllegalStateException("Reflect: inaccessible field " + clazz.getName() + "." + fieldName, e);
-        }
-    }
-
     private static Field findField(Class<?> clazz, String fieldName) {
         NoSuchFieldException first = null;
         for (Class<?> c = clazz; c != null; c = c.getSuperclass()) {
