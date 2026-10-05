@@ -134,3 +134,37 @@ startNative 的异常文案等）；javadoc 中保留的 legacy 对照字样属�
    `Reflect` 的切换在阶段 4 逐文件执行（05 文档）；本阶段业务 hook 面零改动。
 3. javadoc 对照字样（`de.robv`/`XposedBridge` 等）命中 07 文档 rg 扫描的问题沿用阶段 2
    登记，阶段 6 拍板。
+
+## 审计结论（2026-10-05）：通过，允许进入阶段 4
+
+审计方核对 `e47ab44` 的提交范围、阶段记录、入口实现与行为测试归档，确认：
+
+- FeishuKitModule 唯一 modern 入口，java_init.list 指向的类实际存在；
+- 生命周期分工正确（onModuleLoaded 只绑定+路径、onPackageLoaded 只记日志、
+  onPackageReady 唯一完整分发、onHotReloading fail-closed、onHotReloaded 保留 super 清理）；
+- 分发顺序与过滤逻辑符合记录（配置桥先于包名过滤、国内/国际/白标保留、
+  幂等键含 process+package+ClassLoader identity、安装顺序沿用 xposed_init）；
+- 四个 legacy lifecycle 入口收口（接口/`initZygote`/`handleLoadPackage`/`LoadPackageParam`
+  从 app 源码清除，FuckLarkSettingsHook 已删）；
+- ModulePath 公开 setter 回收阶段 2 遗留项正确；
+- 32/32 行为测试、独立编译门、完整构建、DEX 对照、native/version 冻结边界均符合记录。
+- 阶段限制：真实 LSPosed modern 环境加载按记录顺延至阶段 7 真机回归，不影响本阶段验收。
+
+**阶段 3 功能性审计通过。**
+
+### 审计非阻塞备注（基线既有问题）—— 已当场修复
+
+- **问题**：`DataViews.java` 的 `moduleApkPath()` 用 `getField("MODULE_PATH")` 读
+  `AntiRecall.MODULE_PATH`，但该字段是 package-private——`getField` 只查 public，必然
+  `NoSuchFieldException` 被 catch 吞掉、恒返回 null。属迁移前基线既有问题
+  （legacy `initZygote` 时代即如此），非 `e47ab44` 引入；阶段 3 的 ModulePath setter 不依赖它。
+- **影响面**：唯一调用方 `loadReward()`（从模块 APK zip 读 reward.png）在飞书进程一直走
+  PackageManager 兜底路径——Android 11+ 包可见性限制下该兜底大概率也静默失败，即 reward 图
+  在飞书进程内长期加载不出（纯展示资源，无功能性影响）。
+- **修复**（commit `d9de0e3`）：改 `getDeclaredField` + `setAccessible(true)`，与同文件
+  `moduleVersion()` / `moduleVersionCode()` 的既有反射口径一致；飞书进程自此真正读到
+  `MODULE_PATH`。null 兜底链全部保留，行为只增不减。
+- **复验**：独立编译门 PASS、宿主行为测试 32/32 PASS、`build.ps1` 全链路 PASS
+  （APK 1501KB，证书一致）、DEX 计数与审计时完全一致（`de/robv`=5 / `XposedBridge`=1 /
+  `XposedHelpers`=1 / `XC_MethodHook`=3 / `io/github/libxposed`=10）——legacy 面零变化；
+  三个归档日志已用修复后构建刷新。
