@@ -73,8 +73,13 @@ public class ProfileCapture {
                     // section 数据异步加载, 排几次延时抓取(幂等, 只在抓到字段时存)
                     Handler h = new Handler(Looper.getMainLooper());
                     for (long d : new long[]{1500, 3000, 5000, 8000}) {
+                        // 延时任务按未完成计数登记（06 文档 §3.2「delayed task 是否存在」），run 结束递减
+                        HotReloadSafety.beginDelayedTask("profilecapture.scrape-delayed");
                         h.postDelayed(new Runnable() {
-                            @Override public void run() { try { scrape(act); } catch (Throwable t) { ModuleLog.log("[fucklark] scrape err " + t); } }
+                            @Override public void run() {
+                                try { scrape(act); } catch (Throwable t) { ModuleLog.log("[fucklark] scrape err " + t); }
+                                finally { HotReloadSafety.endDelayedTask("profilecapture.scrape-delayed"); }
+                            }
                         }, d);
                     }
                     return result;

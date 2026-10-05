@@ -161,6 +161,9 @@ public class AntiRecall {
             } else {
                 c.registerReceiver(receiver, syncFilter);
             }
+            // 注册成功即登记外部回调（同一接收器承载 ACTION_SYNC + 档案 ACTION_PULL 两个 action）：
+            // 无 unregister 生命周期，是 hot reload 门控的拒绝事实之一（06 文档 §3.3）
+            HotReloadSafety.markExternalCallback("config-bridge.receiver(sync,pull)");
             ModuleLog.log("[fucklark] config bridge bound pkg=" + c.getPackageName());
             // Context 就绪后再与模块权威源对齐一次（install 分发早期可能 context 还是 null）
             try { Config.loadAndAnnounce(); } catch (Throwable ignored) {}
@@ -557,6 +560,9 @@ public class AntiRecall {
 
         System.load(out.getAbsolutePath());
         NATIVE_STARTED = true;
+        // native inline hook（sqlite3_step + liblark .text 维护重打）无 unhook/dlclose 生命周期：
+        // load 返回即登记为 hot reload 拒绝事实（06 文档 §3.1/§3.2）
+        HotReloadSafety.markNativeHook("antirecall.native-inline");
         ModuleLog.log("[antirecall] native lib loaded: " + out.getAbsolutePath());
 
         // 当前目标包的 files dir → 配置/日志/native 日志都按它走(国内/国际版自适应)。
@@ -596,6 +602,8 @@ public class AntiRecall {
 
         Thread t = new Thread(new Installer(), "antirecall-installer");
         t.setDaemon(true);
+        // 安装轮询 + 安装成功后转入 nativeMaintain 常驻维护循环（06 文档 §3.2），无停止信号
+        HotReloadSafety.markThread("antirecall.installer-thread");
         t.start();
     }
 

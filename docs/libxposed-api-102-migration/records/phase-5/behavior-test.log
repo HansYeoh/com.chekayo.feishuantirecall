@@ -1,0 +1,44 @@
+== é˜¶æ®µ5 hot reload å®‰å…¨é—¨æ§è¡Œä¸ºéªŒè¯ï¼ˆå®¿ä¸» JVMï¼‰ ==
+android.jar = C:/Users/Weirdo/AppData/Local/Android/Sdk/platforms/android-37.0/android.jar
+javac OKï¼ˆæ—  stubsï¼‰
+[PASS] ¸É¾»½ø³ÌÎŞ native hook µÇ¼Ç
+[PASS] ¸É¾»½ø³ÌÎŞÏß³Ì/ÑÓÊ±ÈÎÎñµÇ¼Ç
+[PASS] ¸É¾»½ø³ÌÎŞÍâ²¿»Øµ÷µÇ¼Ç
+[PASS] describe ¸É¾»Ì¬ = (clean)
+[PASS] ÎŞ teardown-unsafe ×ÊÔ´Ê± onHotReloading ·µ»Ø true
+[PASS] ·ÅĞĞÊ±ÏòĞÂÒ»´ú´«ÃÅ¿Ø½áÂÛ£¨ÇÒÖ»´«Ò»´Î£©
+[PASS] ·ÅĞĞÒÑ¼ÇÈÕÖ¾
+[PASS] native µÇ¼ÇÖ»Ó°ÏìÃÅ¿ØÒ»
+[PASS] ´æÔÚ native hook Ê±¾Ü¾ø reload
+[PASS] ¾Ü¾øÊ±²»ÏòĞÂÒ»´ú´«ÈÎºÎ×´Ì¬
+[PASS] ¾Ü¾øÈÕÖ¾´ø describe ×ÊÔ´Çåµ¥
+[PASS] ´æÔÚÄ£¿éÏß³ÌÊ±¾Ü¾ø reload
+[PASS] ´æÔÚÍâ²¿»Øµ÷Ê±¾Ü¾ø reload
+[PASS] »Øµ÷µÇ¼ÇÖ»Ó°ÏìÃÅ¿ØÈı
+[PASS] Í¬ÃûÏß³ÌÖØ¸´µÇ¼ÇÔÚ describe ÖĞÖ»³öÏÖÒ»´Î
+[PASS] µÇ¼ÇºóÓĞÄ£¿éÏß³Ì
+[PASS] Á½¸öÎ´Íê³ÉÑÓÊ±ÈÎÎñ°´¼ÆÊıµÇ¼Ç
+[PASS] ´æÔÚÎ´Íê³ÉÑÓÊ±ÈÎÎñÊ±¾Ü¾ø reload
+[PASS] Ê£Ò»¸öÎ´Íê³ÉÑÓÊ±ÈÎÎñÈÔ¾Ü¾øÓïÒå³ÉÁ¢
+[PASS] ¼ÆÊı¹éÁãºó»Øµ½¸É¾»Ì¬£¨¶àÓà end ²»²úÉú¸ºÊı£©
+[PASS] ÑÓÊ±ÈÎÎñÈ«²¿½áÊøºóÖØĞÂ·ÅĞĞ
+[PASS] ÈıÀà×ÊÔ´²¢´æÊ±Á½´ÎĞ­ÉÌ¶¼¾Ü¾ø£¨ÎÈ¶¨¡¢ÎŞÒì³££©
+[PASS] describe ·Ö×éÁĞ³öÈıÀà×ÊÔ´: native=[resigntracker.native-inline] threads=[lark-resign-boot] callbacks=[download-mirror.file-observer]
+[PASS] ¾Ü¾øÂ·¾¶²»Ğ´ savedState
+[PASS] ĞÂ´ú onHotReloaded Íê³ÉÔËĞĞÊ±°ó¶¨
+[PASS] »»´úºó generation id ¸üĞÂ: e0f51838-71cc-48d2-8cc8-0eb543993e11 -> a1a45c36-6f31-44ba-ac11-c37cca86347d
+[PASS] ¾É handle È«Á¿ÇÒ¸÷Ç¡ºÃ unhook Ò»´Î£¨¿ò¼ÜÄ¬ÈÏÓïÒå£©
+[PASS] »»´úÈÕÖ¾¼ÇÂ¼ĞÂ´ú id/savedState/¾É handle Êı
+[PASS] ÖğÌõ¼ÇÂ¼¾É handle id
+[PASS] ĞÂ´ú²¹ ModulePath£¨fake ÎŞ appInfo ¡ú fail-closed ÈÕÖ¾£©
+[PASS] ĞÂ´ú¾ÍĞ÷ÈÕÖ¾È·ÈÏ°²È«±íÎª¿Õ£¨ĞÂ´ú´ÓÁãÆğ²½£©
+[PASS] »»´úÈë¿Ú²»×öÒµÎñ·Ö·¢£¨06 ÎÄµµ ¡ì4.4£ºÖ»×öÏÖ´úÈë¿Ú³õÊ¼»¯£©
+[PASS] ĞÂ´ú¶Ô reload ºó¼ÓÔØµÄ°üÕı³£·Ö·¢
+[PASS] ĞÂ´úÄ¿±ê°ü/ClassLoader ÒÑÉèÖÃ
+[PASS] bind Ê§°Ü·ÖÖ§ÈÔÇåµô¾É handle£¨·À¾É´ú×¤Áô£©
+[PASS] bind Ê§°ÜºóÔËĞĞÊ±±£³ÖÔ­´ú
+[PASS] bind Ê§°ÜÒÑ¼ÇÈÕÖ¾
+[PASS] bind Ê§°Ü·ÖÖ§ÎŞÈÎºÎÒµÎñ³õÊ¼»¯
+[PASS] Í¬ loader ¿ç´ú bind ÈÔ±»¾Ü£¨·À¾É´ú¸´»î£©
+[PASS] ¿ç´ú¾Ü¾øÒÑ¼ÇÈÕÖ¾
+== PASS£ºÈ«²¿ hot reload °²È«ÃÅ¿Ø¶ÏÑÔÍ¨¹ı ==
