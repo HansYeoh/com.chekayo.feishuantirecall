@@ -14,6 +14,7 @@ import org.json.JSONObject;
 
 import com.chekayo.feishuantirecall.Config;
 import com.chekayo.feishuantirecall.AntiRecall;
+import com.chekayo.feishuantirecall.HotReloadSafety;
 import com.chekayo.feishuantirecall.ProfileBulk;
 import com.chekayo.feishuantirecall.Reflect;
 
@@ -78,6 +79,8 @@ public class ResignTracker {
             }
         }, "lark-resign-boot");
         boot.setDaemon(true);
+        // 06 文档 §3.2：boot 线程已启动即登记（它随后拉起 tracker 常驻线程并装载 native，无停止信号）
+        HotReloadSafety.markThread("resigntracker.boot-thread");
         boot.start();
     }
 
@@ -106,6 +109,8 @@ public class ResignTracker {
         so.getParentFile().mkdirs();
         extractSo(so);
         System.load(so.getAbsolutePath());
+        // 抓 libsqlcipher.sqlite3_key_v2 句柄的 native inline hook 无 unhook/dlclose 生命周期（06 文档 §3.1）
+        HotReloadSafety.markNativeHook("resigntracker.native-inline");
         com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": native loaded " + so.getAbsolutePath()
                 + " uid=" + com.chekayo.feishuantirecall.AccountPaths.currentUid);
 
@@ -197,6 +202,8 @@ public class ResignTracker {
             }
         }, "lark-resign-tracker");
         t.setDaemon(true);
+        // while(true) 轮询常驻线程（06 文档 §3.2）
+        HotReloadSafety.markThread("resigntracker.tracker-thread");
         t.start();
         // 启动稍后推一次已有档案/离职名单副本到模块进程（等 Application/Context 就绪）
         Thread pushOnce = new Thread(new Runnable() {
@@ -207,6 +214,8 @@ public class ResignTracker {
             }
         }, "lark-archive-push");
         pushOnce.setDaemon(true);
+        // 06 文档 §3.2 明确列出的 archive push thread
+        HotReloadSafety.markThread("resigntracker.archive-push-thread");
         pushOnce.start();
     }
 

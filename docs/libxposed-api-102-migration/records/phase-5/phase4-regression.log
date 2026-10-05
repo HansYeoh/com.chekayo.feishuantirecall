@@ -1,0 +1,40 @@
+=== phase-4 hook behavior (24 æ–­è¨€) ===
+== é˜¶æ®µ4 hook è¿ç§»è¡Œä¸ºéªŒè¯ï¼ˆå®¿ä¸» JVMï¼‰ ==
+android.jar = C:/Users/Weirdo/AppData/Local/Android/Sdk/platforms/android-37.0/android.jar
+javac OKï¼ˆæ—  stubsï¼‰
+[PASS] ModuleRuntime.bind(Î±ÔìÄ£¿é)
+[PASS] ä¯ÀÀÂ·¾¶£º¹¹ÔìÆ÷ÈÔÖ´ĞĞÒ»´Î£¨proceed£©
+[PASS] ä¯ÀÀÂ·¾¶£ºmessage_ids ÒÑÇå¿Õ£¨proceed ÊÕµ½¿Õ±í£©
+[PASS] ä¯ÀÀÂ·¾¶£ºfold_ids ÒÑÇå¿Õ
+[PASS] ä¯ÀÀÂ·¾¶£ºÔ­ message_ids °´»á»°Ôİ´æ£¨123456789£©
+[PASS] ä¯ÀÀÂ·¾¶£ºµ÷ÓÃ·½Ô­ List ²»±»Ô­µØÇå¿Õ£¨modern ×ß¸±±¾¸Ä²Î£©
+[PASS] SendReqHook£ºÀ¹½Ø·¢ËÍÇëÇó¹¹Ôìºó READ_WINDOW ÒÑ¿ª´°
+[PASS] SendReqHook£º¹¹ÔìÆ÷ÈÔÖ´ĞĞÒ»´Î
+[PASS] »Ø¸´´°¿Ú£ºÔİ´æ ids(a,b) Óë±¾´Î(c) ºÏ²¢»ØÌî
+[PASS] »Ø¸´´°¿Ú£ºfold_ids ²»¶¯£¨½öä¯ÀÀÂ·¾¶Çå¿Õ£©
+[PASS] »Ø¸´´°¿Ú£ºÔİ´æ±í¸Ã»á»°ÌõÄ¿ÒÑÏû·Ñ£¨remove£©
+[PASS] ¿ª¹Ø¹Ø£ºmessage_ids/fold_ids Ô­ÑùÍ¸´«¸ø proceed
+[PASS] ¶Ì²ÎÊı(<8)¹¹Ôì£º²»Å×Òì³£¡¢Ô­²Î·ÅĞĞ
+[PASS] InvokeHook(1021)£ºÔ­µ÷ÓÃÖ´ĞĞÇÒ·µ»ØÖµÍ¸´«£¨²»¶ÌÂ·£©
+[PASS] InvokeHook(10000 ÔëÒô)£ºÈÔ·ÅĞĞÔ­µ÷ÓÃ
+[PASS] MapperHook£ºÓĞÎÄ±¾ -> Èë»º´æÇÒÔ­·½·¨Ö´ĞĞ
+[PASS] MapperHook£º¿ÕÎÄ±¾ -> »ØÌî»º´æÄÚÈİ + setStatus(NORMAL)
+[PASS] MapperHook£ºÔ­·½·¨ÈÔÖ´ĞĞ
+[PASS] FALSE_GATE ¿ª¹Ø¿ª£º·µ»Ø false ÇÒ²»Ö´ĞĞÔ­·½·¨£¨setResult(false) µÈ¼Û£©
+[PASS] VOID_GATE_RESTRICT ¿ª¹Ø¿ª£º·µ»Ø null ÇÒ²»Ö´ĞĞÔ­·½·¨£¨setResult(null) µÈ¼Û£©
+[PASS] FALSE_GATE ¿ª¹Ø¹Ø£ºproceed ·ÅĞĞÇÒ·µ»ØÖµÍ¸´«
+[PASS] VOID_GATE_NOAUDIT ¿ª¹Ø¿ª£ºÉó¼ÆÉÏ±¨¶ÌÂ·
+[PASS] HookRuntime.hookMethod Ê×´Î°²×°
+[PASS] Í¬ logicalId ¶ş´Î°²×°ÃİµÈ£¨0 ĞÂ¿ò¼Ü°²×°£©
+== PASS£ºÈ«²¿ hook Ç¨ÒÆĞĞÎª¶ÏÑÔÍ¨¹ı ==
+
+=== phase-4 standalone é—¨å›å½’ ===
+== é˜¶æ®µ4 hook è¿ç§»ç‹¬ç«‹ç¼–è¯‘é—¨ ==
+android.jar = C:/Users/Weirdo/AppData/Local/Android/Sdk/platforms/android-37.0/android.jar
+A. å…¨é‡ç¼–è¯‘ OKï¼ˆclasspath ä»… android.jar + libxposed classes.jarï¼Œæ—  stubsï¼‰
+B. å­—èŠ‚ç é›¶ legacy tokenï¼ˆde/robvã€XposedBridgeã€XposedHelpersã€XC_MethodHookã€IXposedHook å‡ 0ï¼‰ï¼Œlibxposed API åœ¨ç”¨
+C. æºç æ‰«æé›¶å‘½ä¸­ï¼ˆ07Â§3 å…¨æ¨¡å¼ï¼šde.robv/XposedBridge/XposedHelpers/XC_MethodHook/IXposedHook/xposed_initï¼‰
+D. stubs ä»…å‰© java/lang/invoke/LambdaMetafactory.javaï¼ˆde.robv 6 æ–‡ä»¶å·²åˆ ï¼‰
+E. æ³¨å†Œæ”¶å£ OKï¼š9 ä¸ªä¸šåŠ¡ hook æ–‡ä»¶å…¨èµ° HookRuntimeï¼Œæ— æ³¨å†Œé¢æ³„æ¼
+F. java_init.list å•å…¥å£ä¸å˜ = FeishuKitModule
+== PASSï¼šé˜¶æ®µ4 hook è¿ç§»ç‹¬ç«‹ç¼–è¯‘é—¨ ==

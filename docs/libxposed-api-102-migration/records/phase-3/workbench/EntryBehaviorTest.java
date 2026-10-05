@@ -82,8 +82,9 @@ public class EntryBehaviorTest {
     }
 
     static class FakeHotReloadingParam implements HotReloadingParam {
+        Object savedState;   // 阶段5：记录旧代传给新一代的门控结论
         public android.os.Bundle getExtras() { return null; }
-        public void setSavedInstanceState(Object o) { }
+        public void setSavedInstanceState(Object o) { this.savedState = o; }
     }
 
     static class FakeHotReloadedParam implements HotReloadedParam {
@@ -189,11 +190,20 @@ public class EntryBehaviorTest {
         String key = FeishuKitModule.dispatchKey(FEISHU, cl1);
         check(key.startsWith("main|" + FEISHU + "|"), "幂等键 = process|package|ClassLoader identity");
 
-        // ── 9. hot reload fail-closed（README §2 决策） ──
-        check(m.onHotReloading(new FakeHotReloadingParam()) == false, "onHotReloading 返回 false（拒绝）");
+        // ── 9. hot reload 安全门控（阶段5 升级：按 HotReloadSafety 状态拒绝/放行，06 文档 §2。
+        //      阶段3 的「无条件 fail-closed」契约由本节新断言替代，演进已在阶段5 记录中说明） ──
+        HotReloadSafety.markExternalCallback("config-bridge.receiver(sync,pull)");   // 现网任意已分发进程都有配置桥接收器
+        FakeHotReloadingParam rejectParam = new FakeHotReloadingParam();
+        check(m.onHotReloading(rejectParam) == false, "持有外部回调时 onHotReloading 返回 false（拒绝）");
         check(logCount("hot reload rejected") == 1, "拒绝原因已记日志");
+        check(rejectParam.savedState == null, "拒绝时不向新一代传门控结论");
+        HotReloadSafety.resetForTest();
+        FakeHotReloadingParam acceptParam = new FakeHotReloadingParam();
+        check(m.onHotReloading(acceptParam) == true, "无 teardown-unsafe 资源时放行（06 文档 §2）");
+        check("feishukit:generation-clean".equals(acceptParam.savedState), "放行时传 classloader-neutral 门控结论");
+        // 新一代入口（阶段5 起）：本测试同 loader 下 bind 幂等（真机新代是新 ClassLoader，bind 必成）
         m.onHotReloaded(new FakeHotReloadedParam());
-        check(logCount("onHotReloaded: unexpected") == 1, "onHotReloaded 正常路径不可达，仅诊断");
+        check(logCount("onHotReloaded: generation") == 1, "onHotReloaded 接线：bind + 旧 handle 清理 + ModulePath");
 
         // ── 10. 跨代 bind 拒绝（hot reload 防旧代复活） ──
         FeishuKitModule m2 = newModule();

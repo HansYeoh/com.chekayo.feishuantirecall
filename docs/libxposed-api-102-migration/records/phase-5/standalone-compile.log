@@ -1,0 +1,10 @@
+== 阶段5 hot reload 安全门控独立编译门 ==
+android.jar = C:/Users/Weirdo/AppData/Local/Android/Sdk/platforms/android-37.0/android.jar
+A. 全量编译 OK（classpath 仅 android.jar + libxposed classes.jar，无 stubs）
+B. 字节码零 legacy token（de/robv、XposedBridge、XposedHelpers、XC_MethodHook、IXposedHook 均 0），libxposed API 在用
+C. 源码扫描零命中（07§3 全模式）
+D. stubs 仅剩 java/lang/invoke/LambdaMetafactory.java
+E. module.prop：autoHotReload=true 在位，102/102 与 exceptionMode=protective 未动
+F. 门控接线 OK：入口消费三类查询，AntiRecall/ResignTracker/DownloadMirror/ProfileCapture 打标齐全，HotReloadSafety 纯 java
+G. java_init.list 单入口不变 = FeishuKitModule
+== PASS：阶段5 hot reload 安全门控独立编译门 ==

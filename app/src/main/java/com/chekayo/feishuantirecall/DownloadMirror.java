@@ -101,6 +101,8 @@ public class DownloadMirror {
                 }
             };
             observer.startWatching();
+            // 常驻监听是模块持有的外部回调，无 stopWatching 生命周期：hot reload 门控登记
+            HotReloadSafety.markExternalCallback("download-mirror.file-observer");
             ModuleLog.log("[fucklark][dl] 下载另存 已监听: " + dir.getAbsolutePath());
         } catch (Throwable t) {
             ModuleLog.log("[fucklark][dl] observer install failed: " + t);

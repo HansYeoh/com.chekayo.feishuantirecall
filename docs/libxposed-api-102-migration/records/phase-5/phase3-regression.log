@@ -1,0 +1,39 @@
+== é˜¶æ®µ3 å…¥å£ç”Ÿå‘½å‘¨æœŸè¡Œä¸ºéªŒè¯ï¼ˆå®¿ä¸» JVMï¼‰ ==
+android.jar = C:/Users/Weirdo/AppData/Local/Android/Sdk/platforms/android-37.0/android.jar
+javac OK
+[PASS] onModuleLoaded ºó ModuleRuntime ÒÑ°ó¶¨
+[PASS] ½ø³ÌÃûÀ´×Ô ModuleLoadedParam£¨main£©
+[PASS] °ó¶¨ÈÕÖ¾¼ÇÂ¼ modern api=102 Óë framework ĞÅÏ¢
+[PASS] Ä£¿éÂ·¾¶²»¿ÉµÃÊ± fail-closed£¨±£³Ö null ²¢¼ÇÈÕÖ¾£©
+[PASS] Î´½âÎöµ½Â·¾¶Ê± AntiRecall.MODULE_PATH ±£³Ö null£¨ÒµÎñ²à×ÔĞĞ½µ¼¶£©
+[PASS] ModulePath.apply(Â·¾¶) ³É¹¦
+[PASS] AntiRecall.MODULE_PATH ÒÑ»ØĞ´
+[PASS] ResignTracker.MODULE_PATH ÒÑ»ØĞ´
+[PASS] onPackageLoaded ²»´¥·¢·Ö·¢£¨Ä¿±ê°üÈÔ null£©
+[PASS] onPackageLoaded ÎŞ·Ö·¢ÈÕÖ¾
+[PASS] ·ÇÄ¿±ê°ü²»·Ö·¢
+[PASS] ·ÇÄ¿±ê°ü²»Ëø¶¨ AntiRecall.PKG
+[PASS] ·Ö·¢ÈÕÖ¾Ç¡ºÃ 1 Ìõ
+[PASS] ModuleRuntime Ä¿±ê°ü/ClassLoader ÒÑÉèÖÃ
+[PASS] AntiRecall.PKG Ëø¶¨
+[PASS] ResignTracker.PKG Ëø¶¨
+[PASS] FuckLarkSettings.PKG Ëø¶¨
+[PASS] ProfileCapture.PKG Ëø¶¨
+[PASS] DataViews.PKG Ëø¶¨
+[PASS] Í¬ key ¶ş´Î»Øµ÷²»·Ö·¢
+[PASS] ÖØ¸´·Ö·¢¼ÇÌø¹ıÈÕÖ¾
+[PASS] Ìø¹ıÊ±Ä¿±ê ClassLoader ²»±ä
+[PASS] ²»Í¬ ClassLoader ÊÓÎªĞÂÄ¿±êÖØĞÂ·Ö·¢
+[PASS] Ä¿±ê ClassLoader ÇĞµ½ĞÂ loader
+[PASS] ¹ú¼Ê°æ°üÃûÃüÖĞ·Ö·¢
+[PASS] PKG ÇĞµ½¹ú¼Ê°æ
+[PASS] ÃİµÈ¼ü = process|package|ClassLoader identity
+[PASS] ³ÖÓĞÍâ²¿»Øµ÷Ê± onHotReloading ·µ»Ø false£¨¾Ü¾ø£©
+[PASS] ¾Ü¾øÔ­ÒòÒÑ¼ÇÈÕÖ¾
+[PASS] ¾Ü¾øÊ±²»ÏòĞÂÒ»´ú´«ÃÅ¿Ø½áÂÛ
+[PASS] ÎŞ teardown-unsafe ×ÊÔ´Ê±·ÅĞĞ£¨06 ÎÄµµ ¡ì2£©
+[PASS] ·ÅĞĞÊ±´« classloader-neutral ÃÅ¿Ø½áÂÛ
+[PASS] onHotReloaded ½ÓÏß£ºbind + ¾É handle ÇåÀí + ModulePath
+[PASS] µÚ¶ş´úÊµÀı bind ±»¾Ü£¬ÔËĞĞÊ±ÈÔÊÇÊ×´ú
+[PASS] ¿ç´ú¾Ü¾øÒÑ¼ÇÈÕÖ¾
+== PASS£ºÈ«²¿Èë¿ÚÉúÃüÖÜÆÚ¶ÏÑÔÍ¨¹ı ==
