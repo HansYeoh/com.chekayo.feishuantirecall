@@ -5,6 +5,6 @@ B. 字节码零 legacy token（de/robv、XposedBridge、XposedHelpers、XC_Metho
 C. 源码扫描零命中（07§3 全模式）
 D. stubs 仅剩 java/lang/invoke/LambdaMetafactory.java
 E. module.prop：autoHotReload=true 在位，102/102 与 exceptionMode=protective 未动
-F. 门控接线 OK：入口消费三类查询，AntiRecall/ResignTracker/DownloadMirror/ProfileCapture 打标齐全，HotReloadSafety 纯 java
+F. 门控接线 OK：入口走 inspectReloadSafety 单次快照（禁分次 has*），打标齐全，HotReloadSafety 纯 java
 G. java_init.list 单入口不变 = FeishuKitModule
 == PASS：阶段5 hot reload 安全门控独立编译门 ==

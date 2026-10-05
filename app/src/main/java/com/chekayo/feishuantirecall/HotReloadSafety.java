@@ -15,6 +15,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * hook / 模块自有线程 / 外部回调即拒绝 reload（06 文档 §2 第一版策略：module.prop 声明
  * autoHotReload=true 但安全拒绝优先，避免旧代资源与新代代码叠加运行）。
  *
+ * 门控判定必须走 {@link #inspectReloadSafety()}：三类资源与原因文本在同一次加锁内生成
+ * 不可变 {@link GateSnapshot}，「查完一类到返回」之间不存在被并发打标穿越的窗口
+ * （阶段 5 审计 P1 修复：原实现三类查询各自加锁，登记可插在两类查询之间导致错误放行）。
+ * 三个 has* 查询只作诊断/测试用途，不得用于门控判定。
+ *
  * 登记语义（06 文档 §3.2/§3.3 的「是否启动/是否存在」）：
  * - native hook / 长生命周期线程 / 外部回调：一次性闩。第一版没有 teardown，
  *   这些资源在本代进程内不会消失，「已启动/已注册」即门控事实；
@@ -63,10 +68,10 @@ public final class HotReloadSafety {
         }
     }
 
-    /** 是否存在已装载且无 teardown 能力的 native inline hook（06 文档 §2 门控一）。 */
+    /** 是否存在已装载且无 teardown 能力的 native inline hook（06 文档 §2 门控一）。仅诊断/测试用，门控判定走 {@link #inspectReloadSafety()}。 */
     public static boolean hasNativeHooks() { return hasKind(Kind.NATIVE_HOOK); }
 
-    /** 是否存在模块自有线程或未完成的延时任务（06 文档 §2 门控二；§3.2 把延时任务归线程状态）。 */
+    /** 是否存在模块自有线程或未完成的延时任务（06 文档 §2 门控二；§3.2 把延时任务归线程状态）。仅诊断/测试用，门控判定走 {@link #inspectReloadSafety()}。 */
     public static boolean hasModuleThreads() {
         synchronized (LOCK) {
             if (!PENDING_TASKS.isEmpty()) return true;
@@ -74,33 +79,81 @@ public final class HotReloadSafety {
         }
     }
 
-    /** 是否存在已注册的外部回调（06 文档 §2 门控三）。 */
+    /** 是否存在已注册的外部回调（06 文档 §2 门控三）。仅诊断/测试用，门控判定走 {@link #inspectReloadSafety()}。 */
     public static boolean hasExternalCallbacks() { return hasKind(Kind.EXTERNAL_CALLBACK); }
+
+    /**
+     * 一次性完整门控判定（06 文档 §2 的唯一消费入口，onHotReloading 必须只调本方法）。
+     * 三类资源判定与原因文本在同一次加锁内生成，登记线程无法插在「查完一类到返回」之间；
+     * 返回的快照不可变，发出后不受后续登记影响（点时语义）。
+     */
+    public static GateSnapshot inspectReloadSafety() {
+        synchronized (LOCK) {
+            return new GateSnapshot(
+                    hasKindLocked(Kind.NATIVE_HOOK),
+                    hasKindLocked(Kind.MODULE_THREAD) || !PENDING_TASKS.isEmpty(),
+                    hasKindLocked(Kind.EXTERNAL_CALLBACK),
+                    describeLocked());
+        }
+    }
+
+    /** 门控判定的不可变点时快照：isClean、三类布尔与 describe 来自同一加锁瞬间。 */
+    public static final class GateSnapshot {
+        private final boolean nativeHooks;
+        private final boolean moduleThreads;
+        private final boolean externalCallbacks;
+        private final String describe;
+
+        private GateSnapshot(boolean nativeHooks, boolean moduleThreads, boolean externalCallbacks, String describe) {
+            this.nativeHooks = nativeHooks;
+            this.moduleThreads = moduleThreads;
+            this.externalCallbacks = externalCallbacks;
+            this.describe = describe;
+        }
+
+        /** 三类 teardown-unsafe 资源都不存在时为 true（06 文档 §2 放行条件）。 */
+        public boolean isClean() { return !nativeHooks && !moduleThreads && !externalCallbacks; }
+
+        public boolean hasNativeHooks() { return nativeHooks; }
+
+        public boolean hasModuleThreads() { return moduleThreads; }
+
+        public boolean hasExternalCallbacks() { return externalCallbacks; }
+
+        /** 判定瞬间的资源清单文本；干净时为 "(clean)"。 */
+        public String describe() { return describe; }
+    }
 
     /**
      * 人类可读快照：拒绝原因日志与 reload 诊断用。
      * 全部为空时返回 "(clean)"，否则按 native/threads/callbacks/delayed-tasks 分组列出资源名。
+     * 门控判定请改用 {@link #inspectReloadSafety()}（本方法只诊断，不保证与其它查询同窗）。
      */
     public static String describe() {
         synchronized (LOCK) {
-            if (LATCHED.isEmpty() && PENDING_TASKS.isEmpty()) return "(clean)";
-            StringBuilder sb = new StringBuilder();
-            appendKind(sb, Kind.NATIVE_HOOK, "native");
-            appendKind(sb, Kind.MODULE_THREAD, "threads");
-            appendKind(sb, Kind.EXTERNAL_CALLBACK, "callbacks");
-            if (!PENDING_TASKS.isEmpty()) {
-                if (sb.length() > 0) sb.append(' ');
-                sb.append("delayed-tasks=[");
-                boolean first = true;
-                for (Map.Entry<String, AtomicInteger> e : PENDING_TASKS.entrySet()) {
-                    if (!first) sb.append(',');
-                    sb.append(e.getKey()).append('=').append(e.getValue().get());
-                    first = false;
-                }
-                sb.append(']');
-            }
-            return sb.toString();
+            return describeLocked();
         }
+    }
+
+    /** describe 的锁内实现：与 inspectReloadSafety 共用，保证原因文本与三类判定同源同窗。 */
+    private static String describeLocked() {
+        if (LATCHED.isEmpty() && PENDING_TASKS.isEmpty()) return "(clean)";
+        StringBuilder sb = new StringBuilder();
+        appendKind(sb, Kind.NATIVE_HOOK, "native");
+        appendKind(sb, Kind.MODULE_THREAD, "threads");
+        appendKind(sb, Kind.EXTERNAL_CALLBACK, "callbacks");
+        if (!PENDING_TASKS.isEmpty()) {
+            if (sb.length() > 0) sb.append(' ');
+            sb.append("delayed-tasks=[");
+            boolean first = true;
+            for (Map.Entry<String, AtomicInteger> e : PENDING_TASKS.entrySet()) {
+                if (!first) sb.append(',');
+                sb.append(e.getKey()).append('=').append(e.getValue().get());
+                first = false;
+            }
+            sb.append(']');
+        }
+        return sb.toString();
     }
 
     /** 仅测试用：清空全部登记（宿主 JVM 行为测试的用例间隔离），生产代码不得调用。 */

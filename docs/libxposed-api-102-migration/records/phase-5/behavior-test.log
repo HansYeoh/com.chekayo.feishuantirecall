@@ -26,7 +26,7 @@ javac OKï¼ˆæ—  stubsï¼‰
 [PASS] describe ·Ö×éÁÐ³öÈýÀà×ÊÔ´: native=[resigntracker.native-inline] threads=[lark-resign-boot] callbacks=[download-mirror.file-observer]
 [PASS] ¾Ü¾øÂ·¾¶²»Ð´ savedState
 [PASS] ÐÂ´ú onHotReloaded Íê³ÉÔËÐÐÊ±°ó¶¨
-[PASS] »»´úºó generation id ¸üÐÂ: e0f51838-71cc-48d2-8cc8-0eb543993e11 -> a1a45c36-6f31-44ba-ac11-c37cca86347d
+[PASS] »»´úºó generation id ¸üÐÂ: d779fb30-2b1f-4ca4-a0ec-8192c84509aa -> 3dac2133-b349-4b36-a84d-417c06282014
 [PASS] ¾É handle È«Á¿ÇÒ¸÷Ç¡ºÃ unhook Ò»´Î£¨¿ò¼ÜÄ¬ÈÏÓïÒå£©
 [PASS] »»´úÈÕÖ¾¼ÇÂ¼ÐÂ´ú id/savedState/¾É handle Êý
 [PASS] ÖðÌõ¼ÇÂ¼¾É handle id
@@ -41,4 +41,13 @@ javac OKï¼ˆæ—  stubsï¼‰
 [PASS] bind Ê§°Ü·ÖÖ§ÎÞÈÎºÎÒµÎñ³õÊ¼»¯
 [PASS] Í¬ loader ¿ç´ú bind ÈÔ±»¾Ü£¨·À¾É´ú¸´»î£©
 [PASS] ¿ç´ú¾Ü¾øÒÑ¼ÇÈÕÖ¾
+[PASS] ¸É¾»¿ìÕÕ£ºisClean ÓëÈýÀà²¼¶û¡¢describe ÈýÕßÒ»ÖÂ
+[PASS] ¿ìÕÕ²»¿É±ä£ºµÇ¼Ç²»Ó°ÏìÒÑ·¢³öµÄ¿ìÕÕ£¨µãÊ±ÓïÒå£©
+[PASS] µÇ¼ÇºóÐÂ¿ìÕÕÈçÊµ·´Ó³Àà±ðÓë×ÊÔ´Ãû
+[PASS] isClean ºãµÈÓÚÈýÀà²¼¶ûÖ®»òµÄ·Ç
+[PASS] ²¢·¢Ñ¹Á¦ÏÂ 2 Íò´Î¿ìÕÕÈ«²¿×ÔÇ¢£¨violations=0£©
+[PASS] Ð´Ïß³Ì½áÊøºóÑÓÊ±ÈÎÎñ¼ÆÊý¹éÁã¡¢»Øµ½¸É¾»Ì¬
+[PASS] ²¢·¢ÏÂÈë¿ÚÃÅ¿Ø 8 ´Î¾ö²ßÎÈ¶¨ÇÒ¾Ü¾ø±Ø¼ÇÈÕÖ¾£¨accepts=4 rejects=4£©
+[PASS] ÒÑ·¢²¼µÄÍâ²¿»Øµ÷µÇ¼ÇÔÚ 500 ´ÎÅÐ¶¨ÖÐÁãÂ©¼ì
+[PASS] ÇåÀíºóÃÅ¿Ø»Ö¸´·ÅÐÐ
 == PASS£ºÈ«²¿ hot reload °²È«ÃÅ¿Ø¶ÏÑÔÍ¨¹ý ==
