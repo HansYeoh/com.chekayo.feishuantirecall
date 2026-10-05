@@ -194,3 +194,21 @@
   `io/github/libxposed`=5 不变。
 - 变更范围：仅 `Reflect.java`、`HookRuntime.java` 两个桥接类 + 本记录与测试工件；
   native、版本号、业务文件零改动。
+
+## 复审结论（2026-10-05）：通过，允许进入阶段 3
+
+复审针对修复 commit `9b173f1`，确认三个问题均已正确修复（显式通配重载 + 语义标注、
+registryKey 固化、staticOnly 筛选），行为测试、独立编译证据与阶段记录一致。
+**阶段 2 功能性审计通过。**
+
+### 复审额外发现：验证脚本可移植性（P2）—— 已当场修复
+
+- **问题**：`check-bridge-behavior.sh` / `check-bridge-standalone.sh` 在 `set -u` 下直接引用
+  `$LOCALAPPDATA`，该变量未导出时脚本在进入测试前即因 unbound variable 退出（审计方在其
+  调用环境中实际复现）。属验证脚本环境健壮性问题，与桥接实现和测试断言无关。
+- **修复**：两个脚本的 SDK 探测候选统一改为 `"${LOCALAPPDATA:-}/Android/Sdk"`、
+  `"${HOME:-}/AppData/Local/Android/Sdk"`（可选环境变量一律带 `:-` 缺省，注释已注明）。
+- **验证**：以 `env -u LOCALAPPDATA` 复现审计环境，两脚本均正常走通（行为测试 20/20 PASS，
+  独立编译门 PASS；SDK 经 `$HOME/AppData/Local/Android/Sdk` 回退命中）；归档日志
+  [behavior-test.log](behavior-test.log) / [standalone-compile.log](standalone-compile.log)
+  已用修复后脚本刷新。

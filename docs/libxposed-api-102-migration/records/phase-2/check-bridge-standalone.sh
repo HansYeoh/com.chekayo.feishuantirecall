@@ -21,8 +21,8 @@ JAVAC="$(command -v javac || true)"
 [ -z "$JAVAC" ] && fail "javac not found (set JAVA_HOME)"
 echo "javac = $JAVAC"
 
-# ── android.jar（取 platforms 下版本最高者）──
-SDK_CANDIDATES=("${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$LOCALAPPDATA/Android/Sdk" "$HOME/AppData/Local/Android/Sdk")
+# ── android.jar（取 platforms 下版本最高者；set -u 下可选环境变量一律带 :- 缺省）──
+SDK_CANDIDATES=("${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "${LOCALAPPDATA:-}/Android/Sdk" "${HOME:-}/AppData/Local/Android/Sdk")
 ANDROID_JAR=""
 for sdk in "${SDK_CANDIDATES[@]}"; do
   [ -n "$sdk" ] && [ -d "$sdk/platforms" ] || continue
