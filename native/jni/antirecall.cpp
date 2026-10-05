@@ -94,30 +94,49 @@ typedef void        (*free_t)(void*);
 typedef int         (*bind64_t)(void*, int, long long);
 typedef int         (*bindblob_t)(void*, int, const void*, int, void*);
 typedef int         (*bindtext_t)(void*, int, const char*, int, void*);
-
-static step_t    orig_step = nullptr;
-static sql_t     p_sql      = nullptr;
-static expsql_t  p_exp      = nullptr;
-static free_t    p_free     = nullptr;
-static bind64_t  p_bind64   = nullptr;
-static bindblob_t p_bind_blob = nullptr;
-static bindtext_t p_bind_text = nullptr;
-// 导出被踢群记录: 进程内(sqlcipher 已解密)跑 SELECT 需要的额外符号
 typedef int         (*prepare_t)(void*, const char*, int, void**, const char**);
 typedef int         (*finalize_t)(void*);
 typedef long long   (*coli64_t)(void*, int);
 typedef const void* (*colblob_t)(void*, int);
 typedef int         (*colbytes_t)(void*, int);
 typedef void*       (*dbhandle_t)(void*);
-static dbhandle_t p_db_handle = nullptr;
-static prepare_t  p_prepare  = nullptr;
-static finalize_t p_finalize = nullptr;
-static coli64_t   p_col_i64  = nullptr;
-static colblob_t  p_col_blob = nullptr;
-static colbytes_t p_col_bytes = nullptr;
+
+// ── sqlite provider ──────────────────────────────────────────────────────
+// 飞书 8.x 起消息库改走 libwcdb2.so 自带的 sqlite(260 个导出符号), libsqlcipher.so 只服务
+// 旧组件库; 7.x 则只有 libsqlcipher。两个库各 hook 一份 sqlite3_step —— 语句/句柄严格配
+// 本库符号使用(两库的 sqlite3_stmt 内部布局互不兼容), 逻辑共用 step_common()。
+struct SqlProv {
+    const char *so;
+    bool gave_up;           // 库已加载但符号不全, 放弃
+    bool installed;         // step hook 已装
+    void *step_ep;          // sqlite3_step 入口(检测反篡改还原用)
+    unsigned char hookbytes[16];
+    step_t    orig_step;
+    sql_t     sql;
+    expsql_t  exp;
+    free_t    free_fn;
+    bind64_t  bind64;
+    bindblob_t bind_blob;
+    bindtext_t bind_text;
+    dbhandle_t db_handle;
+    prepare_t prepare;
+    finalize_t finalize;
+    coli64_t   col_i64;
+    colblob_t  col_blob;
+    colbytes_t col_bytes;
+};
+static SqlProv g_prov[2] = {
+    { "libwcdb2.so" },       // 8.x 消息库(优先; 7.x 无此库则恒未装, 无害)
+    { "libsqlcipher.so" },   // 7.x 消息库 + 8.x 旧组件库
+};
+// chatters 表所在连接与其所属 provider(两库句柄不通用, 必须成对使用)
+static void *g_chatters_db = nullptr;          // chatters 表所在连接(与 messages 不同库)
+static SqlProv *g_chatters_pv = nullptr;
+static SqlProv *g_msg_pv = nullptr;            // 首个见到 messages 语句的 provider(诊断用)
+static int my_step_wcdb(void *), my_step_cipher(void *);   // 前向声明
+static bool try_prov(SqlProv *p);                            // 前向声明(maintain_hook 补装迟加载库用)
 static volatile long long g_kicked_chat = 0;   // 最近被踢/清群的 chat_id
 static volatile int g_export_pending = 0;      // 1=待在 messages 连接上导出
-static void *g_chatters_db = nullptr;          // chatters 表所在连接(与 messages 不同库)
 #define SQLITE_TRANSIENT ((void*)-1)
 static volatile int g_neutralized = 0;
 static volatile int g_recall_enabled = 1;   // fuck lark 开关: 0=停用防撤回中和(设置面板可切)
@@ -140,9 +159,6 @@ static PendLeave g_pend[64];
 static volatile int g_pend_n = 0;
 static const long long LEAVE_WIN = 6;        // 确认窗口(秒)
 static bool g_installed = false;
-// sqlite3_step hook 维护(飞书 7.70.x 反篡改会还原 libsqlcipher .text, 抹掉本 hook)
-static void *g_step_ep = nullptr;
-static unsigned char g_step_hookbytes[16] = {0};
 static volatile int g_step_rehook = 0;
 static volatile int g_antiread_cnt = 0;
 static const int g_antiread_sqlite = 0;   // sqlite me_read/read_position 中和(只保自己未读, 不防对方); 本轮关
@@ -151,13 +167,151 @@ static const uintptr_t OFF_EXPORT = 0x5298C3C;
 static const int g_antiread_export = 1;   // 1=no-op 测防已读
 static volatile int g_export_cnt = 0;
 
-// REPLACE INTO `messages` 列序(0-based): 9 content, 14 is_recalled, 0 id, 1 chat_id
-static const int FIELD_IS_RECALLED = 14;
-static const int PARAM_ID      = 1;
-static const int PARAM_CHAT    = 2;
-static const int PARAM_CONTENT = 10;   // content 是第10列(1-based 绑定索引)
-static const int PARAM_CID     = 13;   // cid 是第13列(0-based 12) 1-based 绑定索引
-static const int PARAM_IS_VISIBLE = 31; // is_visible 是第31列(0-based 30) 1-based 绑定索引; 飞书对普通成员把"移除"系统消息写 0 隐藏, 改绑 1 即群内可见
+// ── messages 表 REPLACE 语句的列位(0-based) —— 运行时自适应 ──────────────
+// 7.x 固定列序: 0 id, 1 chat_id, 9 content, 12 cid, 14 is_recalled, 30 is_visible。
+// 8.x 起 ORM 的 SQL 改为运行时拼接、liblark.so 里无静态模板, 列序随时可变 -> 不再写死:
+// 见到 messages 的 REPLACE 语句时现场解析其 SQL 列名表(REPLACE INTO `messages`
+// (`id`,`chat_id`,...) VALUES (...)), 解析不到(无列名表/认不出)回退 7.x 旧列序。
+// 绑定参数序 = 列位 + 1 (SQLite 1-based)。
+struct MsgCols { int id, chat, content, cid, recalled, visible; };   // -1 = 该列不在本语句列名表
+static const MsgCols COLS_V7 = { 0, 1, 9, 12, 14, 30 };              // 7.x 实测列序(兜底)
+static MsgCols g_mc = COLS_V7;
+static volatile int g_mc_parsed = 0;    // 1=已从运行时 SQL 解析出列序(非兜底值)
+static pthread_mutex_t g_mc_lock = PTHREAD_MUTEX_INITIALIZER;
+static unsigned g_mc_hash = 0;          // 最近成功解析的模板哈希(同模板只解析一次)
+
+static unsigned str_hash32(const char *s) {
+    unsigned h = 2166136261u;
+    for (; *s; ++s) { h ^= (unsigned char) *s; h *= 16777619u; }
+    return h;
+}
+
+// 判定是否针对 `messages` 表的 REPLACE 写入(兼容 REPLACE INTO / INSERT OR REPLACE INTO、
+// 反引号有无、空格变体)。out_cols 非空时回传列名表起点; 语句无列名表(直接 VALUES)回传 null。
+static bool is_msg_replace(const char *t, const char **out_cols) {
+    const char *p = nullptr;
+    if (strncmp(t, "REPLACE INTO", 12) == 0) p = t + 12;
+    else if (strncmp(t, "INSERT OR REPLACE INTO", 22) == 0) p = t + 22;
+    else return false;
+    while (*p == ' ') p++;
+    if (*p == '`') {
+        if (strncmp(p + 1, "messages`", 9) != 0) return false;
+        p += 10;
+    } else {
+        if (strncmp(p, "messages", 8) != 0) return false;
+        p += 8;
+    }
+    if (out_cols) *out_cols = nullptr;
+    while (*p == ' ') p++;
+    if (*p == '(') { if (out_cols) *out_cols = p + 1; return true; }
+    return strncmp(p, "VALUES", 6) == 0;   // 无列名表: 值序=建表列序, 调用方走兜底列位
+}
+
+// 解析列名表(逗号分隔, 列名可带反引号/空白), 记录关注列的 0-based 列位, 返回总列数。
+// 只有 id 与 is_recalled 都在(整行 REPLACE)才算成功 —— 部分列 REPLACE 不覆盖缓存列位。
+static int parse_msg_cols(const char *cols, MsgCols *out) {
+    out->id = out->chat = out->content = out->cid = out->recalled = out->visible = -1;
+    int n = 0;
+    const char *p = cols;
+    while (*p && *p != ')') {
+        const char *s = p;
+        while (*p && *p != ',' && *p != ')') p++;
+        while (s < p && (*s == ' ' || *s == '`')) s++;
+        const char *e2 = p;
+        while (e2 > s && (e2[-1] == ' ' || e2[-1] == '`')) e2--;
+        char name[40];
+        int l = (int) (e2 - s);
+        if (l > (int) sizeof name - 1) l = (int) sizeof name - 1;
+        if (l > 0) {
+            memcpy(name, s, (size_t) l); name[l] = 0;
+            if      (strcmp(name, "id") == 0)          out->id = n;
+            else if (strcmp(name, "chat_id") == 0)     out->chat = n;
+            else if (strcmp(name, "content") == 0)     out->content = n;
+            else if (strcmp(name, "cid") == 0)         out->cid = n;
+            else if (strcmp(name, "is_recalled") == 0) out->recalled = n;
+            else if (strcmp(name, "is_visible") == 0)  out->visible = n;
+        }
+        n++;
+        if (*p == ',') p++;
+    }
+    return (out->id >= 0 && out->recalled >= 0) ? n : 0;
+}
+
+// 模板变化时重解析列位并缓存。撤回改绑(id/cid)、is_recalled 判定、is_visible 改绑
+// 全部使用解析出的列位 —— 飞书升级改列序不再需要跟版本改代码。
+static void adapt_msg_cols(const char *tmpl, const char *cols) {
+    unsigned h = str_hash32(tmpl);
+    if (h == g_mc_hash) return;                     // 快路径: 同模板不重复解析
+    pthread_mutex_lock(&g_mc_lock);
+    if (h == g_mc_hash) { pthread_mutex_unlock(&g_mc_lock); return; }
+    MsgCols mc;
+    int n = cols ? parse_msg_cols(cols, &mc) : 0;
+    if (n > 0) {
+        bool changed = mc.id != g_mc.id || mc.chat != g_mc.chat || mc.content != g_mc.content
+                    || mc.cid != g_mc.cid || mc.recalled != g_mc.recalled || mc.visible != g_mc.visible;
+        bool first = (g_mc_parsed == 0);            // 首次解析: 无论是否与7.x一致都留痕, 便于跟版本排查
+        g_mc = mc;
+        g_mc_parsed = 1;
+        g_mc_hash = h;                              // 仅成功解析的整行模板进缓存
+        if (changed || first) {
+            LOGI("ANTIRECALL: messages 列位%s(共%d列) id=%d chat_id=%d content=%d cid=%d is_recalled=%d is_visible=%d",
+                 changed ? "已自适应" : "解析确认与7.x一致", n, mc.id, mc.chat, mc.content, mc.cid, mc.recalled, mc.visible);
+            flog("防撤回: 本机飞书 messages 列序%s(共%d列): id=%d chat_id=%d content=%d cid=%d is_recalled=%d is_visible=%d",
+                 changed ? "与 7.x 不同, 已自适应" : "经解析与 7.x 一致", n, mc.id, mc.chat, mc.content, mc.cid, mc.recalled, mc.visible);
+        }
+    } else {
+        // 部分列 REPLACE(无 id/is_recalled)或无列名表: 不动既有列位。首次遇到记一条。
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            flog("防撤回: 见到无法解析列名表的 messages REPLACE, 沿用现有列位(7.x兜底/已解析值) %.160s", tmpl);
+        }
+    }
+    pthread_mutex_unlock(&g_mc_lock);
+}
+
+// 取 expanded SQL 中 VALUES(...) 第 idx(0-based) 个字段的区间 [fs,fe)。
+// 兼容引号(含 '' 转义)、嵌套括号、x'..' blob; 找不到或序越界返回 false。
+static bool values_field(const char *e, int idx, const char **fs, const char **fe) {
+    if (idx < 0 || !e) return false;
+    const char *v = strstr(e, "VALUES");
+    if (!v) return false;
+    while (*v && *v != '(') v++;
+    if (!*v) return false;
+    const char *p = v + 1;
+    int field = 0; bool inq = false;
+    const char *start = p;
+    while (*p) {
+        char c = *p;
+        if (inq) { if (c == '\'') inq = false; p++; continue; }
+        if (c == '\'') { inq = true; p++; continue; }
+        if (c == '(') {                    // 嵌套括号(展开出的函数值等)整段跳过
+            int depth = 1; p++;
+            while (*p && depth > 0) {
+                if (*p == '\'') inq = !inq;
+                else if (!inq && *p == '(') depth++;
+                else if (!inq && *p == ')') depth--;
+                p++;
+            }
+            continue;
+        }
+        if (c == ',' || c == ')') {
+            if (field == idx) { *fs = start; *fe = p; return true; }
+            if (c == ')') return false;
+            field++; p++; start = p;
+            continue;
+        }
+        p++;
+    }
+    return false;
+}
+// values_field 区间转 long long(容忍前导空白); 非数字开头返回 0。
+static long long field_ll(const char *fs, const char *fe) {
+    while (fs < fe && (*fs == ' ' || *fs == '\t')) fs++;
+    long long v = 0;
+    while (fs < fe && *fs >= '0' && *fs <= '9') { v = v * 10 + (*fs - '0'); fs++; }
+    return v;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // 防已读 (stealth-read) — 已验证方案 (frida hunt15 移植):
@@ -270,30 +424,12 @@ static bool feed_parse(const char *e, uint64_t *id, long long *nmc) {
     return gotid && gotn;
 }
 
+// 撤回写入判定: expanded SQL 的 VALUES 中 is_recalled 字段(列位自适应)值为 1。
 static int recall_is_one(const char *expanded) {
-    const char *v = strstr(expanded, "VALUES (");
-    if (!v) return 0;
-    v += 8;
-    int field = 0;
-    bool inq = false;
-    const char *fs = v;
-    for (const char *p = v; *p; ++p) {
-        char c = *p;
-        if (c == '\'') { inq = !inq; continue; }
-        if (c == ',' && !inq) {
-            if (field == FIELD_IS_RECALLED) {
-                while (fs < p && *fs == ' ') ++fs;
-                return (fs < p && *fs == '1') ? 1 : 0;
-            }
-            ++field;
-            fs = p + 1;
-        }
-    }
-    if (field == FIELD_IS_RECALLED) {
-        while (*fs == ' ') ++fs;
-        return (*fs == '1') ? 1 : 0;
-    }
-    return 0;
+    const char *fs = nullptr, *fe = nullptr;
+    if (!values_field(expanded, g_mc.recalled, &fs, &fe)) return 0;
+    while (fs < fe && *fs == ' ') fs++;
+    return (fs < fe && *fs == '1') ? 1 : 0;
 }
 
 static void dump_bt(const char *what, unsigned a1);   // 前向声明(定义在下方)
@@ -365,26 +501,27 @@ static void pb_extract_buf(char *out, int outsz, int *pos, const unsigned char *
 // 查发送人昵称(chatters.name), 带缓存; id=1 视为系统。
 static struct { long long id; char name[64]; } g_cn[128];
 static volatile int g_cn_n = 0;
-static void get_chatter_name(void *db, long long id, char *out, int outsz) {
+static void get_chatter_name(SqlProv *pv, void *db, long long id, char *out, int outsz) {
     out[0] = 0;
     if (id == 1) { strncpy(out, "系统", outsz - 1); out[outsz - 1] = 0; return; }
     for (int i = 0; i < g_cn_n && i < 128; i++) if (g_cn[i].id == id) { strncpy(out, g_cn[i].name, outsz - 1); out[outsz - 1] = 0; return; }
     void *cdb = g_chatters_db ? g_chatters_db : db;   // chatters 在单独连接
+    SqlProv *cpv = g_chatters_db ? g_chatters_pv : pv;   // 连接与符号必须同库配对
     char c_name[64] = {0}, c_alias[64] = {0}, c_another[64] = {0};
     int prep = -1, rc = -1;
-    if (cdb && p_prepare && p_finalize && p_col_blob && p_col_bytes && orig_step && p_bind64) {
+    if (cdb && cpv && cpv->prepare && cpv->finalize && cpv->col_blob && cpv->col_bytes && cpv->orig_step && cpv->bind64) {
         void *st = nullptr;
-        prep = p_prepare(cdb, "SELECT name, alias, another_name FROM chatters WHERE id = ?", -1, &st, nullptr);
+        prep = cpv->prepare(cdb, "SELECT name, alias, another_name FROM chatters WHERE id = ?", -1, &st, nullptr);
         if (prep == 0 && st) {
-            p_bind64(st, 1, id);
-            rc = orig_step(st);
+            cpv->bind64(st, 1, id);
+            rc = cpv->orig_step(st);
             if (rc == 100) {
                 const unsigned char *v; int l;
-                v = (const unsigned char *) p_col_blob(st, 0); l = p_col_bytes(st, 0); if (v && l > 0) { int cp = l < 63 ? l : 63; memcpy(c_name, v, cp); c_name[cp] = 0; }
-                v = (const unsigned char *) p_col_blob(st, 1); l = p_col_bytes(st, 1); if (v && l > 0) { int cp = l < 63 ? l : 63; memcpy(c_alias, v, cp); c_alias[cp] = 0; }
-                v = (const unsigned char *) p_col_blob(st, 2); l = p_col_bytes(st, 2); if (v && l > 0) { int cp = l < 63 ? l : 63; memcpy(c_another, v, cp); c_another[cp] = 0; }
+                v = (const unsigned char *) cpv->col_blob(st, 0); l = cpv->col_bytes(st, 0); if (v && l > 0) { int cp = l < 63 ? l : 63; memcpy(c_name, v, cp); c_name[cp] = 0; }
+                v = (const unsigned char *) cpv->col_blob(st, 1); l = cpv->col_bytes(st, 1); if (v && l > 0) { int cp = l < 63 ? l : 63; memcpy(c_alias, v, cp); c_alias[cp] = 0; }
+                v = (const unsigned char *) cpv->col_blob(st, 2); l = cpv->col_bytes(st, 2); if (v && l > 0) { int cp = l < 63 ? l : 63; memcpy(c_another, v, cp); c_another[cp] = 0; }
             }
-            p_finalize(st);
+            cpv->finalize(st);
         }
     }
     // 优先备注名(alias) > 群昵称(another_name) > 真名(name)
@@ -479,18 +616,18 @@ static void leave_enqueue(const char *s) {
     pthread_mutex_unlock(&g_leave_lock);
 }
 // 查群名(chats.name) —— 兜底(踢群时多半已被清空)
-static void query_chat_name(void *db, long long chat, char *out, int outsz) {
+static void query_chat_name(SqlProv *pv, void *db, long long chat, char *out, int outsz) {
     out[0] = 0;
-    if (!p_prepare || !p_finalize || !p_col_blob || !p_col_bytes || !orig_step || !p_bind64) return;
+    if (!pv || !pv->prepare || !pv->finalize || !pv->col_blob || !pv->col_bytes || !pv->orig_step || !pv->bind64) return;
     void *st = nullptr;
-    if (p_prepare(db, "SELECT name FROM chats WHERE id = ?", -1, &st, nullptr) != 0 || !st) return;
-    p_bind64(st, 1, chat);
-    if (orig_step(st) == 100) {
-        const unsigned char *nm = (const unsigned char *) p_col_blob(st, 0);
-        int nl = p_col_bytes(st, 0);
+    if (pv->prepare(db, "SELECT name FROM chats WHERE id = ?", -1, &st, nullptr) != 0 || !st) return;
+    pv->bind64(st, 1, chat);
+    if (pv->orig_step(st) == 100) {
+        const unsigned char *nm = (const unsigned char *) pv->col_blob(st, 0);
+        int nl = pv->col_bytes(st, 0);
         if (nm && nl > 0) { int cp = nl < outsz - 1 ? nl : outsz - 1; memcpy(out, nm, cp); out[cp] = 0; }
     }
-    p_finalize(st);
+    pv->finalize(st);
 }
 // 在 text 里找 "<key>" 紧跟数字的那处, 取出 id(系统消息内含 from_user/to_chatters 的 id)。
 static long long find_id_after(const char *text, const char *key) {
@@ -503,12 +640,12 @@ static long long find_id_after(const char *text, const char *key) {
     return 0;
 }
 // 把系统消息(邀请/移除/改群名)拼成清晰中文: "cheky 邀请了 林觉圣"。
-static void build_system_line(const char *text, void *db, char *out, int outsz) {
+static void build_system_line(SqlProv *pv, const char *text, void *db, char *out, int outsz) {
     long long fid = find_id_after(text, "from_user ");
     long long tid = find_id_after(text, "to_chatters ");
     char fn[64] = {0}, tn[64] = {0};
-    if (fid) get_chatter_name(db, fid, fn, sizeof fn);
-    if (tid) get_chatter_name(db, tid, tn, sizeof tn);
+    if (fid) get_chatter_name(pv, db, fid, fn, sizeof fn);
+    if (tid) get_chatter_name(pv, db, tid, tn, sizeof tn);
     if (strstr(text, "updated the group name")) {
         const char *gn = strstr(text, "group_name "); char nm[96] = {0};
         if (gn) { gn += 11; int k = 0; while (gn[k] && gn[k] != ' ' && k < 95) { nm[k] = gn[k]; k++; } nm[k] = 0; }
@@ -522,39 +659,39 @@ static void build_system_line(const char *text, void *db, char *out, int outsz) 
 }
 // 导出被踢群聊天记录: 在 messages 所在连接(sqlcipher 已解密)上跑 SELECT, 解析 protobuf 抠文本写 txt。
 // 必须在拥有该连接的线程上执行 -> 由 my_step 在遇到 messages 语句时(同线程同连接)调用。
-static void do_export(void *db) {
-    if (!db || g_kicked_chat == 0 || !p_prepare || !p_finalize || !p_col_i64 || !p_col_blob || !p_col_bytes || !orig_step || !p_bind64)
+static void do_export(SqlProv *pv, void *db) {
+    if (!pv || !db || g_kicked_chat == 0 || !pv->prepare || !pv->finalize || !pv->col_i64 || !pv->col_blob || !pv->col_bytes || !pv->orig_step || !pv->bind64)
         return;
     char gname[256] = {0};
     const char *cached = lookup_name(g_kicked_chat);   // 优先用平时缓存的群名(踢群时 chats.name 已被清)
     if (cached && cached[0]) { strncpy(gname, cached, sizeof gname - 1); }
-    else query_chat_name(db, g_kicked_chat, gname, sizeof gname);
+    else query_chat_name(pv, db, g_kicked_chat, gname, sizeof gname);
     void *st = nullptr;
     const char *q = "SELECT id, from_id, create_time, content FROM messages WHERE chat_id = ? ORDER BY create_time ASC";
-    if (p_prepare(db, q, -1, &st, nullptr) != 0 || !st) return;
-    p_bind64(st, 1, g_kicked_chat);
+    if (pv->prepare(db, q, -1, &st, nullptr) != 0 || !st) return;
+    pv->bind64(st, 1, g_kicked_chat);
     char path[320];
     snprintf(path, sizeof path, "%s/kicked_%lld.txt", g_data_dir, (long long) g_kicked_chat);
     FILE *f = fopen(path, "w");
-    if (!f) { p_finalize(st); return; }
+    if (!f) { pv->finalize(st); return; }
     // 结构化: 首行群名; 之后每条 = 时间 \t 昵称 \t 文本 (Java 侧解析成聊天气泡)
     fprintf(f, "群: %s\n", gname[0] ? gname : "(未取到群名)");
     int n = 0;
-    while (orig_step(st) == 100) {   // SQLITE_ROW=100
-        long long from = p_col_i64(st, 1), ct = p_col_i64(st, 2);
-        const unsigned char *blob = (const unsigned char *) p_col_blob(st, 3);
-        int blen = p_col_bytes(st, 3);
+    while (pv->orig_step(st) == 100) {   // SQLITE_ROW=100
+        long long from = pv->col_i64(st, 1), ct = pv->col_i64(st, 2);
+        const unsigned char *blob = (const unsigned char *) pv->col_blob(st, 3);
+        int blen = pv->col_bytes(st, 3);
         char text[4096]; int tp = 0; text[0] = 0;
         if (blob && blen > 0) pb_extract_buf(text, sizeof text, &tp, blob, blen, 0);
         text[tp < (int) sizeof text ? tp : (int) sizeof text - 1] = 0;
         while (tp > 0 && (text[tp - 1] == ' ' || text[tp - 1] == '\n' || text[tp - 1] == '\t')) text[--tp] = 0;
         for (int k = 0; k < tp; k++) if (text[k] == '\t' || text[k] == '\n') text[k] = ' ';   // 别破坏分隔
         char *tx = text; while (*tx == ' ') tx++;                                             // 去前导空格
-        char nm[64]; get_chatter_name(db, from, nm, sizeof nm);
+        char nm[64]; get_chatter_name(pv, db, from, nm, sizeof nm);
         for (int k = 0; nm[k]; k++) if (nm[k] == '\t') nm[k] = ' ';
         char tstr[24]; time_t tt = (time_t) ct; struct tm tmv; localtime_r(&tt, &tmv); strftime(tstr, sizeof tstr, "%m-%d %H:%M", &tmv);
         if (from == 1 && tx[0]) {   // 系统消息: 拼成"cheky 邀请了 林觉圣"
-            char sysl[256]; build_system_line(tx, db, sysl, sizeof sysl);
+            char sysl[256]; build_system_line(pv, tx, db, sysl, sizeof sysl);
             for (int k = 0; sysl[k]; k++) if (sysl[k] == '\t' || sysl[k] == '\n') sysl[k] = ' ';
             fprintf(f, "%s\t系统\t%s\n", tstr, sysl);
         } else {
@@ -562,7 +699,7 @@ static void do_export(void *db) {
         }
         n++;
     }
-    p_finalize(st);
+    pv->finalize(st);
     fclose(f);
     if (n == 0) {   // 空导出(该群本地无消息): 删掉文件, 别在列表里留"未取到群名"的空壳
         remove(path);
@@ -577,8 +714,11 @@ static volatile int g_msg_dump = 0;      // 1=dump 前几条普通消息完整�
 // 防已读探测结论(2026-07 实测): 开聊天读回执时 sqlite 只有 全列渲染SELECT / UPDATE me_read / REPLACE,
 //   无"取要标已读 id 列表"的窄 SELECT -> 报告 id 在内存 async 层, 不过 sqlite -> 桌面"清空messageIds"无 sqlite 落点。
 static volatile int g_read_sql_diag = 0;   // 探测已完成, 关闭
-static int my_step(void *stmt) {
-    const char *t = p_sql ? p_sql(stmt) : nullptr;
+
+// 双 provider 的 step 入口: wcdb2(8.x 消息库) / sqlcipher(7.x + 旧组件库) 各挂一份,
+// 共用下面这套逻辑; 语句/句柄只配本库符号(两库 sqlite3_stmt 布局不通用)。
+static int step_common(SqlProv *pv, void *stmt) {
+    const char *t = pv->sql ? pv->sql(stmt) : nullptr;
     // ── 防已读探测: 抓所有涉及 me_read / read 的 SELECT(去重, 只记不同模板) ──
     //   目的: 看读回执发送前, async 是否从 sqlite 取"要标已读的 message_id 列表"。
     if (g_read_sql_diag && t &&
@@ -601,9 +741,9 @@ static int my_step(void *stmt) {
         if ((strncmp(t, "CREATE", 6) == 0) && strstr(t, "messages")) {
             static volatile int cd = 0; if (++cd <= 20) LOGI("SCHEMA-DIAG: %.500s", t);
         }
-        if ((strncmp(t, "REPLACE INTO `messages`", 23) == 0 || strncmp(t, "UPDATE `messages`", 17) == 0 ||
+        if ((is_msg_replace(t, nullptr) || strncmp(t, "UPDATE `messages`", 17) == 0 ||
              strncmp(t, "DELETE FROM `messages`", 22) == 0)) {
-            char *e = p_exp ? p_exp(stmt) : nullptr;
+            char *e = pv->exp ? pv->exp(stmt) : nullptr;
             if (e) {
                 if (strstr(e, "is_recalled") || strstr(t, "is_recalled") || strstr(t, "DELETE")) {
                     // 打印 VALUES/WHERE 起始处(跳过长列名表), 看 id/position/cid/is_recalled 实际值
@@ -614,7 +754,7 @@ static int my_step(void *stmt) {
                         LOGI("RECALL-DIAG #%d verb=%s val=%.320s", c, verb, vp);
                     }
                 }
-                p_free(e);
+                pv->free_fn(e);
             }
         }
     }
@@ -645,28 +785,28 @@ static int my_step(void *stmt) {
         // 冲刷超窗仍未被插回的待确认删除 = 真退群 -> 提交(借每条 SQL 流过的时机, 飞书 SQL 频繁足够及时)。
         if (g_leave_notify && g_pend_n > 0) pend_flush();
         // chatters 连接捕获(供查发送人名; 独立于"保留被踢群"开关, 否则只开退群提醒时查不到名字)
-        if (p_db_handle && strstr(t, "`chatters`")) g_chatters_db = p_db_handle(stmt);
+        if (pv->db_handle && strstr(t, "`chatters`")) g_chatters_db = pv->db_handle(stmt); g_chatters_pv = pv;
         // 诊断B: 成员级删除展开(可行性佐证用)
-        if (g_diag_log && p_exp &&
+        if (g_diag_log && pv->exp &&
             (strncmp(t, "DELETE FROM `non_departmental_chatters`", 39) == 0 ||
              (strncmp(t, "DELETE FROM `chat_chatter_ref`", 30) == 0 && strstr(t, "chatter_id")))) {
-            char *e = p_exp(stmt);
-            if (e) { static volatile int md = 0; if (++md <= 80) flog("成员变动探测B: %.220s", e); p_free(e); }
+            char *e = pv->exp(stmt);
+            if (e) { static volatile int md = 0; if (++md <= 80) flog("成员变动探测B: %.220s", e); pv->free_fn(e); }
         }
         // 诊断B2: chat_chatter_ref 的插入/重插(供确认 re-sync/改角色时把成员行插回来的语句形态)
-        if (g_diag_log && p_exp && strstr(t, "`chat_chatter_ref`") &&
+        if (g_diag_log && pv->exp && strstr(t, "`chat_chatter_ref`") &&
             (strncmp(t, "INSERT", 6) == 0 || strncmp(t, "REPLACE", 7) == 0)) {
-            char *e = p_exp(stmt);
-            if (e) { static volatile int mi = 0; if (++mi <= 120) flog("成员重插探测B2: %.260s", e); p_free(e); }
+            char *e = pv->exp(stmt);
+            if (e) { static volatile int mi = 0; if (++mi <= 120) flog("成员重插探测B2: %.260s", e); pv->free_fn(e); }
         }
         // ★ 静默退群/被移除 检测 —— 公司里离职自动退群【不广播系统消息】, 只删成员表:
         //   DELETE FROM `chat_chatter_ref` WHERE `chat_id` = <X> AND `chatter_id` IN (<a>,<b>,...)
         //   系统消息路径(下方 REPLACE INTO messages)漏掉这类, 故在此补: 解析 chat_id + 每个 chatter_id,
         //   查名记进 leave_log(只记录、不弹 Toast, 避免公司群批量退群刷屏)。
         //   仅认【带 chatter_id 的定向删除】= 真·某成员离开; 不含 chatter_id 的整表刷新是 re-sync, 不算。
-        if (g_leave_notify && p_exp &&
+        if (g_leave_notify && pv->exp &&
             strncmp(t, "DELETE FROM `chat_chatter_ref`", 30) == 0 && strstr(t, "chatter_id")) {
-            char *e = p_exp(stmt);
+            char *e = pv->exp(stmt);
             if (e) {
                 long long chat = 0;
                 const char *cp = strstr(e, "chat_id");
@@ -675,11 +815,11 @@ static int my_step(void *stmt) {
                 const char *ip = strstr(e, "chatter_id");
                 const char *lp = ip ? strstr(ip, "IN") : nullptr;
                 if (chat && lp) {
-                    void *db = p_db_handle ? p_db_handle(stmt) : nullptr;
+                    void *db = pv->db_handle ? pv->db_handle(stmt) : nullptr;
                     char gname[128] = {0};
                     const char *cn = lookup_name(chat);
                     if (cn && cn[0]) strncpy(gname, cn, sizeof gname - 1);
-                    else if (db) query_chat_name(db, chat, gname, sizeof gname);
+                    else if (db) query_chat_name(pv, db, chat, gname, sizeof gname);
                     const char *grp = gname[0] ? gname : "群聊";
                     const char *q = lp; while (*q && *q != '(') q++;   // 定位 (
                     while (*q && *q != ')') {
@@ -688,7 +828,7 @@ static int my_step(void *stmt) {
                         long long cid = 0; while (*q >= '0' && *q <= '9') { cid = cid * 10 + (*q - '0'); q++; }
                         if (cid && !mleave_has(chat ^ (cid * 1000003LL))) {
                             char nm[64] = {0};
-                            if (db) get_chatter_name(db, cid, nm, sizeof nm);
+                            if (db) get_chatter_name(pv, db, cid, nm, sizeof nm);
                             char msg[256];
                             if (nm[0] && (nm[0] < '0' || nm[0] > '9'))
                                 snprintf(msg, sizeof msg, "%s 离开了群聊「%s」(成员移除/离职退群)", nm, grp);
@@ -700,14 +840,14 @@ static int my_step(void *stmt) {
                         }
                     }
                 }
-                p_free(e);
+                pv->free_fn(e);
             }
         }
         // ★ 成员行被 REPLACE 插回 -> 取消对应待确认删除(re-sync / 改角色, 非真退群)。
         //   语句形态: REPLACE INTO `chat_chatter_ref` (`chat_id`,`chatter_id`,`weight`) VALUES (X, Y, Z)
-        if (g_leave_notify && g_pend_n > 0 && p_exp &&
+        if (g_leave_notify && g_pend_n > 0 && pv->exp &&
             strncmp(t, "REPLACE", 7) == 0 && strstr(t, "`chat_chatter_ref`")) {
-            char *e = p_exp(stmt);
+            char *e = pv->exp(stmt);
             if (e) {
                 const char *v = strstr(e, "VALUES");
                 if (v) {
@@ -718,11 +858,11 @@ static int my_step(void *stmt) {
                     long long ru = 0; while (*q >= '0' && *q <= '9') { ru = ru * 10 + (*q - '0'); q++; }
                     if (rc && ru) pend_cancel(rc, ru);
                 }
-                p_free(e);
+                pv->free_fn(e);
             }
         }
-        if (strncmp(t, "REPLACE INTO `messages`", 23) == 0 && p_exp) {
-            char *e = p_exp(stmt);
+        if (is_msg_replace(t, nullptr) && pv->exp) {
+            char *e = pv->exp(stmt);
             if (e) {
                 const char *hx = strstr(e, "x'");   // content protobuf blob (十六进制)
                 if (hx) {
@@ -745,25 +885,23 @@ static int my_step(void *stmt) {
                     if (g_leave_notify && (isRemove || isLeft)) {
                         // ★ 群内持久显示: 飞书把"移除/退群"系统消息写 is_visible=0 对普通成员隐藏 ->
                         //   改绑成 1, 飞书即像渲染"邀请"消息一样把它显示进聊天窗(持久, 原生样式)。
-                        //   每次写入都翻(re-sync 会重写), 与去重(Toast/记录)无关。
-                        if (p_bind64) p_bind64(stmt, PARAM_IS_VISIBLE, 1LL);
-                        // VALUES 前两个整数 = id(去重) + chat_id
+                        //   每次写入都翻(re-sync 会重写), 与去重(Toast/记录)无关。列位自适应(8.x)。
+                        if (pv->bind64 && g_mc.visible >= 0) pv->bind64(stmt, g_mc.visible + 1, 1LL);
+                        // VALUES 的 id 与 chat_id 列(列位自适应)
                         long long mid = 0, chat = 0;
-                        const char *v = strstr(e, "VALUES (");
-                        if (v) { const char *q = v + 8; while (*q == ' ') q++;
-                                 while (*q >= '0' && *q <= '9') { mid = mid * 10 + (*q - '0'); q++; }
-                                 while (*q == ',' || *q == ' ') q++;
-                                 while (*q >= '0' && *q <= '9') { chat = chat * 10 + (*q - '0'); q++; } }
+                        const char *fs = nullptr, *fe = nullptr;
+                        if (values_field(e, g_mc.id, &fs, &fe)) mid = field_ll(fs, fe);
+                        if (values_field(e, g_mc.chat, &fs, &fe)) chat = field_ll(fs, fe);
                         if (mid && !leave_seen(mid)) {
-                            void *db = p_db_handle ? p_db_handle(stmt) : nullptr;
+                            void *db = pv->db_handle ? pv->db_handle(stmt) : nullptr;
                             long long tid = find_id_after(text, "to_chatters ");
                             long long fid = find_id_after(text, "from_user ");
                             char tn[64] = {0}, fn[64] = {0}, gname[128] = {0};
-                            if (db) { if (tid) get_chatter_name(db, tid, tn, sizeof tn);
-                                      if (fid) get_chatter_name(db, fid, fn, sizeof fn); }
+                            if (db) { if (tid) get_chatter_name(pv, db, tid, tn, sizeof tn);
+                                      if (fid) get_chatter_name(pv, db, fid, fn, sizeof fn); }
                             const char *cn = lookup_name(chat);
                             if (cn && cn[0]) strncpy(gname, cn, sizeof gname - 1);
-                            else if (db) query_chat_name(db, chat, gname, sizeof gname);
+                            else if (db) query_chat_name(pv, db, chat, gname, sizeof gname);
                             const char *who = tn[0] ? tn : "某成员";
                             const char *grp = gname[0] ? gname : "群聊";
                             char msg[256];
@@ -780,7 +918,7 @@ static int my_step(void *stmt) {
                         }
                     }
                 }
-                p_free(e);
+                pv->free_fn(e);
             }
         }
     }
@@ -789,16 +927,16 @@ static int my_step(void *stmt) {
     //   紧接着 DELETE FROM messages 删记录。策略: 见"清群删除"就丢弃它并开 3s 窗口, 窗口内丢弃删消息。
     if (g_keep_kicked && t) {
         // 捕获 chatters 表所在连接(与 messages 不同库), 供导出查发送人昵称。
-        if (p_db_handle && strstr(t, "`chatters`")) g_chatters_db = p_db_handle(stmt);
+        if (pv->db_handle && strstr(t, "`chatters`")) g_chatters_db = pv->db_handle(stmt); g_chatters_pv = pv;
         // 平时缓存群名(踢群前 UPDATE chats SET name=? 里解析), 供导出用。
         if (strncmp(t, "UPDATE `chats`", 14) == 0 && strstr(t, "`name`")) {
-            char *e = p_exp ? p_exp(stmt) : nullptr;
+            char *e = pv->exp ? pv->exp(stmt) : nullptr;
             if (e) {
                 long long cid = 0; const char *wp = strstr(e, "WHERE");
                 if (wp) { const char *q = strstr(wp, "id"); if (q) { while (*q && !(*q >= '0' && *q <= '9')) q++; while (*q >= '0' && *q <= '9') { cid = cid * 10 + (*q - '0'); q++; } } }
                 const char *np = strstr(e, "`name`");
                 if (cid && np) { const char *s = strchr(np, '\''); if (s) { s++; char nm[96]; int k = 0; while (s[k] && s[k] != '\'' && k < 95) { nm[k] = s[k]; k++; } nm[k] = 0; cache_name(cid, nm); } }
-                p_free(e);
+                pv->free_fn(e);
             }
         }
         // 注意: 导出【不再】在此处靠 strstr(t,"messages") 松触发 —— 那会命中任何含 messages 的语句
@@ -821,12 +959,12 @@ static int my_step(void *stmt) {
                  strncmp(t, "DELETE FROM `schedule_message`", 30) == 0);
             if (teardown) {
                 long long dcid = 0;
-                char *e = p_exp ? p_exp(stmt) : nullptr;
+                char *e = pv->exp ? pv->exp(stmt) : nullptr;
                 if (e) {
                     const char *cp = strstr(e, "chat_id");
                     if (cp) { const char *q = cp; while (*q && !(*q >= '0' && *q <= '9')) q++;
                               while (*q >= '0' && *q <= '9') { dcid = dcid * 10 + (*q - '0'); q++; } }
-                    p_free(e);
+                    pv->free_fn(e);
                 }
                 if (dcid > 0) {
                     g_kicked_chat = dcid;
@@ -839,7 +977,7 @@ static int my_step(void *stmt) {
             }
             if (now_ms() < g_kick_window && strncmp(t, "DELETE FROM `messages`", 22) == 0) {
                 // 真要删消息了 = 确认被踢/退群/解散(别人退群只刷成员表, 不会走到这) -> 此刻先导出(消息还在), 再丢弃删除。
-                if (g_export_pending && p_db_handle) { g_export_pending = 0; do_export(p_db_handle(stmt)); }
+                if (g_export_pending && pv->db_handle) { g_export_pending = 0; do_export(pv, pv->db_handle(stmt)); }
                 static volatile int km = 0; int c = ++km;
                 if (c <= 80) flog("保留被踢群: 窗口内拦删消息 %.80s", t);
                 return 101;   // 丢弃删消息 -> 聊天记录保留
@@ -847,60 +985,102 @@ static int my_step(void *stmt) {
         }
     }
     bool drop_recall = false;
-    if (g_recall_enabled && t && strncmp(t, "REPLACE INTO `messages`", 23) == 0) {
-        char *e = p_exp ? p_exp(stmt) : nullptr;
-        if (e) {
-            if (recall_is_one(e)) {
-                // 解析原 message id (VALUES 首值)
-                long long oid = 0;
-                const char *v = strstr(e, "VALUES (");
-                if (v) { const char *q = v + 8; while (*q == ' ') q++; while (*q >= '0' && *q <= '9') { oid = oid * 10 + (*q - '0'); q++; } }
-                if (oid > 0 && g_recall_drop == 0 && p_bind_text) {
-                    // 方案3(7.70.x 持久提示): 撤回行改 id + cid 双改绑成唯一值 => 不撞 messages 唯一索引
-                    //   (cid / (chat_id,position) 任一为 unique 时, 旧的只改 id 会因 cid 相同连带删原行)。
-                    //   原行(is_recalled=0,内容完整)与撤回行(is_recalled=1)并存 -> 既见原文又见"撤回了一条消息"。
-                    long long nid = oid ^ 0x4000000000000000LL;
-                    p_bind64(stmt, PARAM_ID, nid);
-                    char cidbuf[24]; snprintf(cidbuf, sizeof cidbuf, "ar%lld", nid);
-                    p_bind_text(stmt, PARAM_CID, cidbuf, -1, SQLITE_TRANSIENT);
-                    int n = ++g_neutralized;
-                    LOGI("ANTIRECALL: 撤回→持久提示 oid=%lld nid=%lld cid=%s (total=%d)", oid, nid, cidbuf, n);
-                    flog_recall(oid, n, "id+cid改绑");
-                } else {
-                    // 兜底: 直接丢弃撤回写入(原文保留, 无持久提示)
-                    drop_recall = true;
-                    int n = ++g_neutralized;
-                    LOGI("ANTIRECALL: 撤回写入已丢弃(原文保留) oid=%lld (total=%d)", oid, n);
-                    flog_recall(oid, n, "丢弃撤回写入");
+    if (g_recall_enabled && t) {
+        const char *mcols = nullptr;
+        if (is_msg_replace(t, &mcols)) {
+            if (g_msg_pv == nullptr) {
+                g_msg_pv = pv;   // 诊断: 确认本机消息库走哪个 provider(8.x=wcdb2 / 7.x=sqlcipher)
+                LOGI("ANTIRECALL: messages 语句经 %s (provider 确定)", pv->so);
+                flog("防撤回: 消息库 provider = %s", pv->so);
+            }
+            adapt_msg_cols(t, mcols);   // 列位自适应(8.x 起 SQL 运行时拼接, 列序可能已变)
+            char *e = pv->exp ? pv->exp(stmt) : nullptr;
+            if (e) {
+                if (recall_is_one(e)) {
+                    // 解析原 message id(id 列位与 is_recalled 判定同一条语句)
+                    const char *ifs = nullptr, *ife = nullptr;
+                    long long oid = values_field(e, g_mc.id, &ifs, &ife) ? field_ll(ifs, ife) : 0;
+                    if (oid > 0 && g_recall_drop == 0 && pv->bind_text && g_mc.cid >= 0) {
+                        // 方案3(7.70.x 持续提示): 撤回行改 id + cid 双改绑成唯一值 => 不撞 messages 唯一索引
+                        //   (cid / (chat_id,position) 任一为 unique 时, 旧的只改 id 会因 cid 相同连带删原行)。
+                        //   原行(is_recalled=0,内容完整)与撤回行(is_recalled=1)并存 -> 既见原文又见"撤回了一条消息"。
+                        long long nid = oid ^ 0x4000000000000000LL;
+                        pv->bind64(stmt, g_mc.id + 1, nid);
+                        char cidbuf[24]; snprintf(cidbuf, sizeof cidbuf, "ar%lld", nid);
+                        pv->bind_text(stmt, g_mc.cid + 1, cidbuf, -1, SQLITE_TRANSIENT);
+                        int n = ++g_neutralized;
+                        LOGI("ANTIRECALL: 撤回→持久提示 oid=%lld nid=%lld cid=%s (total=%d)", oid, nid, cidbuf, n);
+                        flog_recall(oid, n, "id+cid改绑");
+                    } else {
+                        // 兜底: 直接丢弃撤回写入(原文保留, 无持久提示)
+                        drop_recall = true;
+                        int n = ++g_neutralized;
+                        LOGI("ANTIRECALL: 撤回写入已丢弃(原文保留) oid=%lld (total=%d)", oid, n);
+                        flog_recall(oid, n, "丢弃撤回写入");
+                    }
                 }
+                // 防已读破时序: 消息入库即提前追 message_id(id 列), 远早于读 -> 回执发出时已在监视.
+                if (g_stealth_read) {
+                    const char *ifs = nullptr, *ife = nullptr;
+                    if (values_field(e, g_mc.id, &ifs, &ife)) {
+                        long long mid = field_ll(ifs, ife);
+                        if (mid > 0) watch_add((uint64_t) mid);
+                    }
+                }
+                pv->free_fn(e);
             }
-            // 防已读破时序: 消息入库即提前追 message_id(第0列=id, VALUES 首值), 远早于读 -> 回执发出时已在监视.
-            if (g_stealth_read) {
-                const char *v = strstr(e, "VALUES (");
-                if (v) { uint64_t mid = 0; const char *q = v + 8; while (*q == ' ') q++; while (*q >= '0' && *q <= '9') { mid = mid * 10 + (*q - '0'); q++; } if (mid > 0) watch_add(mid); }
-            }
-            p_free(e);
+            if (drop_recall) return 101;   // SQLITE_DONE: 谎报"写入完成", 实际不执行, 原行保留
         }
-        if (drop_recall) return 101;   // SQLITE_DONE: 谎报"写入完成", 实际不执行, 原行保留
+        // 兜底: 若飞书把撤回改成 UPDATE `messages` SET ... is_recalled=1(不再走 REPLACE),
+        //   丢弃该 UPDATE -> 原行(原文完整)保留。SET 参数序无需解析, 丢弃即可。
+        if (!drop_recall && strncmp(t, "UPDATE `messages`", 17) == 0 && strstr(t, "is_recalled") && pv->exp) {
+            char *e = pv->exp(stmt);
+            if (e) {
+                // 只认 SET 子句(WHERE 前)里 is_recalled 被赋 1 的语句, 误伤面最小
+                const char *we = strstr(e, "WHERE");
+                int setlen = we ? (int) (we - e) : (int) strlen(e);
+                const char *ir = nullptr;
+                for (const char *q = e; (q = strstr(q, "is_recalled")) && !ir; ) {
+                    if (q < e + setlen) ir = q;      // 取 SET 段内第一处 is_recalled
+                    q += 11;
+                }
+                if (ir) {
+                    const char *q = ir + 11;
+                    while (*q == ' ' || *q == '`') q++;
+                    if (*q == '=') {
+                        q++;
+                        while (*q == ' ') q++;
+                        if (*q == '1') {
+                            drop_recall = true;
+                            int n = ++g_neutralized;
+                            LOGI("ANTIRECALL: UPDATE形撤回已丢弃(原文保留) (total=%d)", n);
+                            flog_recall(0, n, "UPDATE形撤回丢弃");
+                        }
+                    }
+                }
+                pv->free_fn(e);
+            }
+            if (drop_recall) return 101;
+        }
     }
     // 防已读 中和 (手册稳定存储层咽喉): UPDATE `messages` SET `me_read` = ? WHERE id IN (?)
     //   参数1 = me_read 值; 改绑成 0 -> 消息本地保持未读, 已读上报进程"无 me_read 可报".
     if (g_antiread_sqlite && t && strncmp(t, "UPDATE `messages` SET `me_read` = ?", 35) == 0) {
-        p_bind64(stmt, 1, 0LL);
+        pv->bind64(stmt, 1, 0LL);
         int n = ++g_antiread_cnt;
         LOGI("ANTIREAD: me_read 1->0 (total=%d)", n);
     }
     // 冻结 chats.read_position: 专门的 read_position 更新, 把 WHERE chat_id(参数9)改哨兵 -> 不命中 -> 读位置不前进
     if (g_antiread_sqlite && t &&
         strncmp(t, "UPDATE `chats` SET `read_position` = ?, `read_position_badge_count`", 65) == 0) {
-        p_bind64(stmt, 9, 1LL);
+        pv->bind64(stmt, 9, 1LL);
         LOGI("ANTIREAD: froze chats.read_position (WHERE id->sentinel)");
     }
     // ── 防已读 stealth-read: ① 追踪 chats.rp/lmp(并标活跃) ② 重算 feed_channel 红点 ──
     if (g_stealth_read && t) {
         if (strncmp(t, "UPDATE `chats` SET", 18) == 0 &&
             (strstr(t, "read_position") || strstr(t, "last_message_position"))) {
-            char *e = p_exp ? p_exp(stmt) : nullptr;
+            char *e = pv->exp ? pv->exp(stmt) : nullptr;
             if (e) {
                 long long id = find_num(e, "`chats`.`id`");
                 if (id > 0) {
@@ -918,25 +1098,25 @@ static int my_step(void *stmt) {
                     static volatile int tk = 0; if (++tk <= 40)
                         LOGI("STEALTH-READ TRACK chat=%llu rp=%lld lmp=%lld", (unsigned long long) id, rp, lmp);
                 }
-                p_free(e);
+                pv->free_fn(e);
             }
         } else if (strncmp(t, "UPDATE `messages` SET `me_read`", 30) == 0) {
             // 读时标记已读的消息 id 列表 -> 监视(回执引用这些 message_id)
-            char *e = p_exp ? p_exp(stmt) : nullptr;
+            char *e = pv->exp ? pv->exp(stmt) : nullptr;
             if (e) {
                 int got = watch_in_list(e);
                 if (got > 0) { g_read_window = now_ms() + 10000; static volatile int mr = 0; if (++mr <= 40) LOGI("STEALTH-READ watch me_read ids=%d", got); }
-                p_free(e);
+                pv->free_fn(e);
             }
         } else if (strncmp(t, "REPLACE INTO `message_read_time`", 32) == 0) {
-            char *e = p_exp ? p_exp(stmt) : nullptr;
+            char *e = pv->exp ? pv->exp(stmt) : nullptr;
             if (e) {
                 const char *v = strstr(e, "VALUES (");
                 if (v) { long long mid = 0; const char *q = v + 8; while (*q == ' ') q++; while (*q >= '0' && *q <= '9') { mid = mid * 10 + (*q - '0'); q++; } if (mid > 0) watch_add((uint64_t) mid); }
-                p_free(e);
+                pv->free_fn(e);
             }
         } else if (strncmp(t, "REPLACE INTO `feed_channel`", 27) == 0) {
-            char *e = p_exp ? p_exp(stmt) : nullptr;
+            char *e = pv->exp ? pv->exp(stmt) : nullptr;
             if (e) {
                 uint64_t id = 0; long long nmc = -1;
                 if (feed_parse(e, &id, &nmc)) {
@@ -951,18 +1131,20 @@ static int my_step(void *stmt) {
                         }
                     pthread_mutex_unlock(&g_chats_lock);
                     if (desired >= 0 && desired != (int) nmc) {
-                        p_bind64(stmt, 10, (long long) desired);   // new_message_count = 本地真实未读
+                        pv->bind64(stmt, 10, (long long) desired);   // new_message_count = 本地真实未读
                         static volatile int bf = 0; int b = ++bf;
                         if (b <= 8) LOGI("STEALTH-READ badge: feed_channel new_message_count %lld->%d (chat=%llu)",
                                           nmc, desired, (unsigned long long) id);
                     }
                 }
-                p_free(e);
+                pv->free_fn(e);
             }
         }
     }
-    return orig_step(stmt);
+    return pv->orig_step(stmt);
 }
+static int my_step_wcdb(void *stmt)   { return step_common(&g_prov[0], stmt); }
+static int my_step_cipher(void *stmt) { return step_common(&g_prov[1], stmt); }
 
 // 在 /proc/self/maps 里找 so 的加载基址: 取【文件偏移=0 且以 ELF magic 开头】的映射
 static uintptr_t find_base(const char *name) {
@@ -1402,15 +1584,23 @@ extern "C" void my_649();                     // 前向声明(naked 跳板定义
 static void maintain_hook() {
     // ★ sqlite3_step 反篡改维护: 飞书 7.70.x 的 PV-MON 会把 libsqlcipher .text 还原,
     //   抹掉我们的 inline hook. 检测入口字节被改回原样则立即重装. (必须在 649 早返回之前)
-    if (g_step_ep && orig_step && memcmp(g_step_ep, g_step_hookbytes, 16) != 0) {
-        A64HookFunction(g_step_ep, (void *) my_step, (void **) &orig_step);
-        memcpy(g_step_hookbytes, g_step_ep, 16);
-        int c = __atomic_add_fetch(&g_step_rehook, 1, __ATOMIC_RELAXED);
-        if (c <= 40 || c % 100 == 0) {
-            LOGI("ANTIRECALL: re-hooked sqlite3_step (anti-tamper restored it) #%d", c);
-            if (c == 1 || c % 100 == 0)
-                flog("防撤回: 飞书反篡改还原了 hook, 已重装 (第%d次) —— 属正常, hook 仍在工作", c);
+    for (SqlProv &p : g_prov) {
+        if (p.installed && p.step_ep && memcmp(p.step_ep, p.hookbytes, 16) != 0) {
+            A64HookFunction(p.step_ep, (void *) (p.so == g_prov[0].so ? my_step_wcdb : my_step_cipher),
+                            (void **) &p.orig_step);
+            memcpy(p.hookbytes, p.step_ep, 16);
+            int c = __atomic_add_fetch(&g_step_rehook, 1, __ATOMIC_RELAXED);
+            if (c <= 40 || c % 100 == 0) {
+                LOGI("ANTIRECALL: re-hooked sqlite3_step@%s (anti-tamper restored it) #%d", p.so, c);
+                if (c == 1 || c % 100 == 0)
+                    flog("防撤回: 飞书反篡改还原了 hook, 已重装 (第%d次) —— 属正常, hook 仍在工作", c);
+            }
         }
+    }
+    // 迟加载的 provider 补装(节流 ~2s 一次; 7.x 无 wcdb2 则永远扫不到, 无害)
+    static volatile int sweep = 0;
+    if (__atomic_add_fetch(&sweep, 1, __ATOMIC_RELAXED) % 13 == 0) {
+        for (SqlProv &p : g_prov) if (!p.installed) try_prov(&p);
     }
     if (!g_649_installed || !g_lark_base) return;
     void *ep = (void *) (g_lark_base + OFF_ENQ649);
@@ -1606,40 +1796,50 @@ Java_com_chekayo_feishuantirecall_AntiRecall_nativePollLeaveEvent(JNIEnv *env, j
     return got ? env->NewStringUTF(out) : nullptr;
 }
 
+// 尝试给一个 provider 解析符号并 hook 其 sqlite3_step。
+// 库未加载 -> false(下次再试); 符号不全 -> 标记放弃; 成功 -> installed。
+static bool try_prov(SqlProv *p) {
+    if (p->installed || p->gave_up) return p->installed;
+    uintptr_t base = find_base(p->so);
+    if (!base) return false;
+    void *step = resolve(base, "sqlite3_step");
+    p->sql       = (sql_t)     resolve(base, "sqlite3_sql");
+    p->exp       = (expsql_t)  resolve(base, "sqlite3_expanded_sql");
+    p->free_fn   = (free_t)    resolve(base, "sqlite3_free");
+    p->bind64    = (bind64_t)  resolve(base, "sqlite3_bind_int64");
+    p->bind_blob = (bindblob_t)resolve(base, "sqlite3_bind_blob");
+    p->bind_text = (bindtext_t)resolve(base, "sqlite3_bind_text");
+    p->db_handle = (dbhandle_t)resolve(base, "sqlite3_db_handle");
+    p->prepare   = (prepare_t) resolve(base, "sqlite3_prepare_v2");
+    p->finalize  = (finalize_t)resolve(base, "sqlite3_finalize");
+    p->col_i64   = (coli64_t)  resolve(base, "sqlite3_column_int64");
+    p->col_blob  = (colblob_t) resolve(base, "sqlite3_column_blob");
+    p->col_bytes = (colbytes_t)resolve(base, "sqlite3_column_bytes");
+    LOGI("%s base=%p step=%p sql=%p exp=%p bind64=%p", p->so, (void *) base, step,
+         (void *) p->sql, (void *) p->exp, (void *) p->bind64);
+    if (!step || !p->sql || !p->exp || !p->free_fn || !p->bind64) {
+        LOGE("%s resolve failed (sym missing), give up this provider", p->so);
+        p->gave_up = true;
+        return false;
+    }
+    A64HookFunction(step, (void *) (p == &g_prov[0] ? my_step_wcdb : my_step_cipher),
+                    (void **) &p->orig_step);
+    p->step_ep = step;
+    memcpy(p->hookbytes, step, 16);   // 记录 hook 后的入口字节, 供 maintain 检测被还原
+    p->installed = true;
+    LOGI("ANTI-RECALL native hook installed on %s sqlite3_step @%p", p->so, step);
+    return true;
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_chekayo_feishuantirecall_AntiRecall_tryInstall(JNIEnv *, jclass) {
     install_probe();   // 防已读调研探针 (与 sqlcipher 防撤回 hook 互不影响)
 
-    // 只有 sqlcipher 与 探针 都搞定才停轮询 (探针需等 liblark 加载)
+    // 任一 provider 挂上 + 探针就绪即完成; 迟加载的 provider 由 maintain_hook 周期补装。
     if (g_installed) return g_probe_installed ? JNI_TRUE : JNI_FALSE;
-    uintptr_t base = find_base("libsqlcipher.so");
-    if (!base) return JNI_FALSE;               // 库还没加载, 继续重试
-
-    void *step = resolve(base, "sqlite3_step");
-    p_sql    = (sql_t)    resolve(base, "sqlite3_sql");
-    p_exp    = (expsql_t) resolve(base, "sqlite3_expanded_sql");
-    p_free   = (free_t)   resolve(base, "sqlite3_free");
-    p_bind64 = (bind64_t) resolve(base, "sqlite3_bind_int64");
-    p_bind_blob = (bindblob_t) resolve(base, "sqlite3_bind_blob");
-    p_bind_text = (bindtext_t) resolve(base, "sqlite3_bind_text");
-    // 导出被踢群记录用
-    p_db_handle = (dbhandle_t)  resolve(base, "sqlite3_db_handle");
-    p_prepare   = (prepare_t)   resolve(base, "sqlite3_prepare_v2");
-    p_finalize  = (finalize_t)  resolve(base, "sqlite3_finalize");
-    p_col_i64   = (coli64_t)    resolve(base, "sqlite3_column_int64");
-    p_col_blob  = (colblob_t)   resolve(base, "sqlite3_column_blob");
-    p_col_bytes = (colbytes_t)  resolve(base, "sqlite3_column_bytes");
-    LOGI("base=%p step=%p sql=%p exp=%p free=%p bind64=%p blob=%p",
-         (void *) base, step, (void *) p_sql, (void *) p_exp, (void *) p_free, (void *) p_bind64, (void *) p_bind_blob);
-    if (!step || !p_sql || !p_exp || !p_free || !p_bind64) {
-        LOGE("resolve failed (sym missing)");
-        g_installed = true;                     // sqlcipher 这边放弃, 但仍等探针
-        return g_probe_installed ? JNI_TRUE : JNI_FALSE;
-    }
-    A64HookFunction(step, (void *) my_step, (void **) &orig_step);
-    g_step_ep = step;
-    memcpy(g_step_hookbytes, step, 16);   // 记录 hook 后的入口字节, 供 maintain 检测被还原
+    bool any = false;
+    for (SqlProv &p : g_prov) if (try_prov(&p)) any = true;
+    if (!any) return JNI_FALSE;               // 一个库都还没就绪, 继续重试
     g_installed = true;
-    LOGI("ANTI-RECALL native hook installed on sqlite3_step @%p", step);
     return g_probe_installed ? JNI_TRUE : JNI_FALSE;
 }
