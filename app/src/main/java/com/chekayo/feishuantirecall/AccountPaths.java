@@ -53,8 +53,11 @@ public final class AccountPaths {
                 long bestT = 0;
                 for (File s : subs) {
                     if (!s.isDirectory()) continue;
+                    // 仅认含 contact.db 的真账号目录: log/byteview 等杂项目录没有 contact.db,
+                    // 若按目录 mtime 参与竞争会被误选为 uid, 导致数据写进伪账号桶
                     File db = new File(s, "contact.db");
-                    long t = db.exists() ? db.lastModified() : s.lastModified();
+                    if (!db.isFile()) continue;
+                    long t = db.lastModified();
                     if (t >= bestT) { bestT = t; best = s; }
                 }
                 if (best != null) {
