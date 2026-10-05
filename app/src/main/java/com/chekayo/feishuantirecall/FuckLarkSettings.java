@@ -9,21 +9,22 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
 /**
- * FeishuKit Xposed 入口：在飞书「设置」页注入独立卡片，仅显示「模块设置」。
+ * FeishuKit 设置页卡片：在飞书「设置」页注入独立卡片，仅显示「模块设置」。
  * 字号/图标随同页原生 setting item 自适应；点击弹出 {@link SettingsPanel}。
  *
  * 入口两处：
  * 1) 飞书设置 → 卡片「模块设置」；
  * 2) 桌面图标 / LSPosed 启动 → LauncherActivity。
+ *
+ * 生命周期: 不再实现 legacy 入口接口(原包装类 FuckLarkSettingsHook 已删),
+ * 由唯一 modern 入口 FeishuKitModule 在 onPackageReady 调 {@link #install} 分发。
  */
-public class FuckLarkSettings implements IXposedHookLoadPackage {
+public class FuckLarkSettings {
 
     static final String PKG_FEISHU = "com.ss.android.lark";
     static final String PKG_LARK = "com.larksuite.suite";
@@ -44,13 +45,13 @@ public class FuckLarkSettings implements IXposedHookLoadPackage {
 
     static boolean isLarkFamily(String pkg) { return PKG_FEISHU.equals(pkg) || PKG_LARK.equals(pkg); }
 
-    @Override
-    public void handleLoadPackage(LoadPackageParam lpparam) {
-        if (!isLarkFamily(lpparam.packageName) && !AntiRecall.isLarkApp(lpparam.classLoader)) return;
-        PKG = lpparam.packageName;
+    /** 完整功能安装。唯一分发点: FeishuKitModule.onPackageReady(已过滤国内/国际/白标)。 */
+    public static void install(String packageName, ClassLoader classLoader) {
+        if (!isLarkFamily(packageName) && !AntiRecall.isLarkApp(classLoader)) return;
+        PKG = packageName;
         DataViews.PKG = PKG;
         DataMigration.install();
-        hookSettingPages(lpparam.classLoader);
+        hookSettingPages(classLoader);
     }
 
     /** 多目标 hook：任一设置页类存在即挂 onResume，保证有「模块设置」入口。 */

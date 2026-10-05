@@ -12,12 +12,9 @@ import java.util.zip.ZipFile;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
-import de.robv.android.xposed.IXposedHookZygoteInit;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
 import com.chekayo.feishuantirecall.Config;
 import com.chekayo.feishuantirecall.AntiRecall;
@@ -31,12 +28,15 @@ import com.chekayo.feishuantirecall.ProfileBulk;
  *   我们也已存档 (这就覆盖了 B 向前捕获的核心价值)。
  * 输出: /data/data/com.ss.android.lark/files/resign_tracker/resigned_all.json (累计, 按 uid 去重)
  *        + resigned_latest.json (最近一次快照原样)
+ *
+ * 生命周期: 不再实现 legacy 入口接口, 由唯一 modern 入口 FeishuKitModule 在
+ * onPackageReady 调 {@link #install} 分发。
  */
-public class ResignTracker implements IXposedHookLoadPackage, IXposedHookZygoteInit {
+public class ResignTracker {
 
     static final String PKG_FEISHU = "com.ss.android.lark";
     static final String PKG_LARK = "com.larksuite.suite";   // 国际版, v7.72.10 真机确认
-    static volatile String PKG = PKG_FEISHU;   // 运行时锁定当前目标包
+    static volatile String PKG = PKG_FEISHU;   // 运行时锁定当前目标包(FeishuKitModule 分发时)
     static boolean isLarkFamily(String pkg) { return PKG_FEISHU.equals(pkg) || PKG_LARK.equals(pkg); }
     static final String TAG = "LarkResign";
 
@@ -53,13 +53,16 @@ public class ResignTracker implements IXposedHookLoadPackage, IXposedHookZygoteI
     public static native int nativeArmRoster(String path);  // 请求一次全量花名册 dump -> JSONL
     public static native int nativeRosterResult();          // -999 pending, >=0 行数, -1 句柄未就绪
 
-    @Override
-    public void initZygote(IXposedHookZygoteInit.StartupParam sp) { MODULE_PATH = sp.modulePath; }
+    /** 供 ModulePath 在 onModuleLoaded 阶段回写模块 APK 路径(legacy 由 initZygote 设置)。 */
+    public static void setModulePath(String path) { MODULE_PATH = path; }
 
-    @Override
-    public void handleLoadPackage(LoadPackageParam lpparam) {
-        if (!isLarkFamily(lpparam.packageName) && !AntiRecall.isLarkApp(lpparam.classLoader)) return;
-        PKG = lpparam.packageName;   // 锁定当前目标(主进程内唯一)
+    /**
+     * 完整功能安装。唯一分发点: FeishuKitModule.onPackageReady(已过滤国内/国际/白标)。
+     * 本类自带主进程限制: 只在主进程干活 (子进程无消息库/会重复)。
+     */
+    public static void install(String packageName, ClassLoader classLoader) {
+        if (!isLarkFamily(packageName) && !AntiRecall.isLarkApp(classLoader)) return;
+        PKG = packageName;   // 锁定当前目标(主进程内唯一)
         // 只在主进程干活 (子进程无消息库/会重复)
         if (!PKG.equals(currentProcessName())) return;
 
