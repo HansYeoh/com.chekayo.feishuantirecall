@@ -1,0 +1,9 @@
+== 阶段4 hook 迁移独立编译门 ==
+android.jar = C:/Users/Weirdo/AppData/Local/Android/Sdk/platforms/android-37.0/android.jar
+A. 全量编译 OK（classpath 仅 android.jar + libxposed classes.jar，无 stubs）
+B. 字节码零 legacy token（de/robv、XposedBridge、XposedHelpers、XC_MethodHook、IXposedHook 均 0），libxposed API 在用
+C. 源码扫描零命中（07§3 全模式：de.robv/XposedBridge/XposedHelpers/XC_MethodHook/IXposedHook/xposed_init）
+D. stubs 仅剩 java/lang/invoke/LambdaMetafactory.java（de.robv 6 文件已删）
+E. 注册收口 OK：9 个业务 hook 文件全走 HookRuntime，无注册面泄漏
+F. java_init.list 单入口不变 = FeishuKitModule
+== PASS：阶段4 hook 迁移独立编译门 ==

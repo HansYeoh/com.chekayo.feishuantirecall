@@ -9,9 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.libxposed.api.XposedInterface;
 
 /**
  * 飞书防撤回 (com.ss.android.lark) —— 双层方案
@@ -108,25 +106,29 @@ public class AntiRecall {
         if (CONFIG_BRIDGE_INSTALLED) return;
         CONFIG_BRIDGE_INSTALLED = true;
         try {
-            Object app = XposedHelpers.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+            Object app = Reflect.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
             if (app instanceof android.content.Context) {
                 bindConfigBridge((android.content.Context) app);
                 return;
             }
         } catch (Throwable ignored) {}
         try {
-            XposedHelpers.findAndHookMethod(android.app.Instrumentation.class, "callApplicationOnCreate",
-                    android.app.Application.class, new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam p) {
+            HookRuntime.hookMethod(android.app.Instrumentation.class, "callApplicationOnCreate",
+                    new Class<?>[]{android.app.Application.class}, "configbridge.callApplicationOnCreate",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    // legacy after-hook：Application 创建完成后再绑定配置桥
+                    Object result = chain.proceed();
                     try {
-                        if (p.args[0] instanceof android.content.Context) {
-                            bindConfigBridge((android.content.Context) p.args[0]);
+                        if (chain.getArgs().get(0) instanceof android.content.Context) {
+                            bindConfigBridge((android.content.Context) chain.getArgs().get(0));
                         }
                     } catch (Throwable ignored) {}
+                    return result;
                 }
             });
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] config bridge defer failed: " + t);
+            ModuleLog.log("[fucklark] config bridge defer failed: " + t);
         }
     }
 
@@ -159,11 +161,11 @@ public class AntiRecall {
             } else {
                 c.registerReceiver(receiver, syncFilter);
             }
-            XposedBridge.log("[fucklark] config bridge bound pkg=" + c.getPackageName());
+            ModuleLog.log("[fucklark] config bridge bound pkg=" + c.getPackageName());
             // Context 就绪后再与模块权威源对齐一次（install 分发早期可能 context 还是 null）
             try { Config.loadAndAnnounce(); } catch (Throwable ignored) {}
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] config bridge bind failed: " + t);
+            ModuleLog.log("[fucklark] config bridge bind failed: " + t);
         }
     }
 
@@ -186,27 +188,27 @@ public class AntiRecall {
             NotifArchive.setFilesDir(fdir);
             try { Config.loadAndAnnounce(); } catch (Throwable ignored) {}
             installNotifHook();
-        } catch (Throwable t) { XposedBridge.log("[fucklark] notif archive init failed: " + t); }
+        } catch (Throwable t) { ModuleLog.log("[fucklark] notif archive init failed: " + t); }
 
         // ---- 0.5) 去除聊天水印: hook View.setForeground, 丢弃水印包的前景 drawable ----
-        try { installWatermarkHook(); } catch (Throwable t) { XposedBridge.log("[fucklark] watermark init failed: " + t); }
+        try { installWatermarkHook(); } catch (Throwable t) { ModuleLog.log("[fucklark] watermark init failed: " + t); }
 
         // ---- 0.55) 屏蔽输入框上方「消息速览」AI 总结小提示 ----
-        try { AiPeekBlock.install(); } catch (Throwable t) { XposedBridge.log("[fucklark] ai peek init failed: " + t); }
+        try { AiPeekBlock.install(); } catch (Throwable t) { ModuleLog.log("[fucklark] ai peek init failed: " + t); }
 
         // ---- 0.6) 解除文件/图片下载限制: 加密聊天禁另存 -> 强制放行(按签名定位, 抗混淆) ----
-        try { FileDownloadUnlock.install(classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] download unlock init failed: " + t); }
+        try { FileDownloadUnlock.install(classLoader); } catch (Throwable t) { ModuleLog.log("[fucklark] download unlock init failed: " + t); }
 
         // ---- 0.65) 解除「保密模式」复制/转发限制: RestrictedMode 门禁拦截器 -> 全放行(按签名定位, 抗混淆) ----
-        try { RestrictedModeUnlock.install(classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] restricted-mode unlock init failed: " + t); }
+        try { RestrictedModeUnlock.install(classLoader); } catch (Throwable t) { ModuleLog.log("[fucklark] restricted-mode unlock init failed: " + t); }
 
         // ---- 0.7) 主页顶部更新横幅: hook MainActivity.onResume, 有新版时注入横幅 ----
-        try { UpdateBanner.install(classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] update banner init failed: " + t); }
+        try { UpdateBanner.install(classLoader); } catch (Throwable t) { ModuleLog.log("[fucklark] update banner init failed: " + t); }
 
         // ---- 0.8) 下载文件另存到系统「下载」: 主进程监听 Lark/download, 写完即 MediaStore 复制到公共 Download ----
         try {
             if (PKG.equals(currentProcessName())) installDownloadMirror();
-        } catch (Throwable t) { XposedBridge.log("[fucklark] download mirror init failed: " + t); }
+        } catch (Throwable t) { ModuleLog.log("[fucklark] download mirror init failed: " + t); }
 
         // ---- 1) 原生 SQL 层: 仅主进程 ----
         try {
@@ -214,7 +216,7 @@ public class AntiRecall {
                 startNative();
             }
         } catch (Throwable t) {
-            XposedBridge.log("[antirecall] native start failed: " + t);
+            ModuleLog.log("[antirecall] native start failed: " + t);
         }
 
         // ---- 1.5) 防对方已读 (v2, Java 层): hook UpdateMessagesMeReadRequest 构造, 清空 message_ids/fold_ids ----
@@ -243,18 +245,19 @@ public class AntiRecall {
         if (legacyMapper) {
             Object normal = null;
             try {
-                normal = XposedHelpers.getStaticObjectField(XposedHelpers.findClass(STATUS, cl), "NORMAL");
+                normal = Reflect.getStaticObjectField(Reflect.findClass(STATUS, cl), "NORMAL");
             } catch (Throwable t) {
-                XposedBridge.log("[antirecall] get NORMAL failed: " + t);
+                ModuleLog.log("[antirecall] get NORMAL failed: " + t);
             }
             try {
-                XposedHelpers.findAndHookMethod(MAPPER, cl, "a", Object.class, int.class, new MapperHook(normal));
-                XposedBridge.log("[antirecall] 旧版飞书: Java 映射器 " + MAPPER + ".a 已挂 (legacy mode)");
+                HookRuntime.findAndHookMethod(MAPPER, cl, "a", new Class<?>[]{Object.class, int.class},
+                        "antirecall.mapper", new MapperHook(normal));
+                ModuleLog.log("[antirecall] 旧版飞书: Java 映射器 " + MAPPER + ".a 已挂 (legacy mode)");
             } catch (Throwable t) {
-                XposedBridge.log("[antirecall] hook " + MAPPER + ".a failed: " + t);
+                ModuleLog.log("[antirecall] hook " + MAPPER + ".a failed: " + t);
             }
         } else {
-            XposedBridge.log("[antirecall] 新版飞书: " + MAPPER + ".a(Object,int) 不存在, 仅走 native SQL 层 (new mode)");
+            ModuleLog.log("[antirecall] 新版飞书: " + MAPPER + ".a(Object,int) 不存在, 仅走 native SQL 层 (new mode)");
         }
     }
 
@@ -282,7 +285,7 @@ public class AntiRecall {
 
     static String feishuVersion() {
         try {
-            Object app = XposedHelpers.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+            Object app = Reflect.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
             android.content.Context ctx = (android.content.Context) app;
             android.content.pm.PackageInfo pi = ctx.getPackageManager().getPackageInfo(PKG, 0);
             return pi.versionName + " (" + pi.versionCode + ")";
@@ -292,27 +295,33 @@ public class AntiRecall {
     /** 下载另存监听: 取 Application context 装 DownloadMirror; context 尚未就绪则 hook Instrumentation.callApplicationOnCreate 兜底。 */
     static void installDownloadMirror() {
         try {
-            Object app = XposedHelpers.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+            Object app = Reflect.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
             if (app instanceof android.content.Context) {
                 DownloadMirror.install((android.content.Context) app);
                 return;
             }
         } catch (Throwable ignored) {}
         try {
-            XposedHelpers.findAndHookMethod(android.app.Instrumentation.class, "callApplicationOnCreate",
-                    android.app.Application.class, new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam p) {
-                    if (p.args[0] instanceof android.content.Context) DownloadMirror.install((android.content.Context) p.args[0]);
+            HookRuntime.hookMethod(android.app.Instrumentation.class, "callApplicationOnCreate",
+                    new Class<?>[]{android.app.Application.class}, "dlmirror.deferAppCreate",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    // legacy after-hook：Application 就绪后装 DownloadMirror（无内部 try，靠 protective 兜底）
+                    Object result = chain.proceed();
+                    if (chain.getArgs().get(0) instanceof android.content.Context) {
+                        DownloadMirror.install((android.content.Context) chain.getArgs().get(0));
+                    }
+                    return result;
                 }
             });
-        } catch (Throwable t) { XposedBridge.log("[fucklark][dl] defer install failed: " + t); }
+        } catch (Throwable t) { ModuleLog.log("[fucklark][dl] defer install failed: " + t); }
     }
 
     /** 当前目标飞书包的 files 目录(国内/国际版 + /data/user/0 兼容)。 */
     static File larkFilesDir() {
         // 首选: App 真实 files 目录(getFilesDir), 任何包名/沙箱/工作资料/虚拟化都对; currentApplication 早期可能为 null -> 回退猜路径。
         try {
-            Object app = XposedHelpers.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+            Object app = Reflect.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
             if (app instanceof android.content.Context) {
                 File f = ((android.content.Context) app).getFilesDir();
                 if (f != null) return f;
@@ -331,16 +340,19 @@ public class AntiRecall {
      *  notify(int,Notification) 内部转调本 3 参重载, 故只 hook 这一处即可覆盖两种调用。 */
     static void installNotifHook() {
         try {
-            XposedHelpers.findAndHookMethod(android.app.NotificationManager.class, "notify",
-                    String.class, int.class, android.app.Notification.class, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
+            HookRuntime.hookMethod(android.app.NotificationManager.class, "notify",
+                    new Class<?>[]{String.class, int.class, android.app.Notification.class},
+                    "notifarchive.notify", new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    // legacy before-hook：通知先抓存档再放行
+                    try { NotifArchive.capture((android.app.Notification) chain.getArgs().get(2)); } catch (Throwable ignored) {}
                     // 开关判定放进 capture()(内部节流热读磁盘配置), 以覆盖 :wschannel 进程 Config 内存不同步。
-                    try { NotifArchive.capture((android.app.Notification) p.args[2]); } catch (Throwable ignored) {}
+                    return chain.proceed();
                 }
             });
-            XposedBridge.log("[fucklark] 后台消息存档: NotificationManager.notify 已 hook (进程 " + currentProcessName() + ")");
+            ModuleLog.log("[fucklark] 后台消息存档: NotificationManager.notify 已 hook (进程 " + currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] notif hook install failed: " + t);
+            ModuleLog.log("[fucklark] notif hook install failed: " + t);
         }
         // 同时挂 UI 还原: 撤回系统提示渲染时把存档原文拼回去
         installRecallUiRestore();
@@ -359,20 +371,23 @@ public class AntiRecall {
 
     static void installRecallUiRestore() {
         try {
-            XC_MethodHook h = new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam p) {
+            XposedInterface.Hooker h = new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    // legacy after-hook：原方法先执行，回调异常不影响原返回值
+                    Object result = chain.proceed();
                     try {
+                        Object[] args = chain.getArgs().toArray();
                         CharSequence src = null;
-                        if (p.args != null && p.args.length > 0 && p.args[0] instanceof CharSequence) {
-                            src = (CharSequence) p.args[0];
+                        if (args.length > 0 && args[0] instanceof CharSequence) {
+                            src = (CharSequence) args[0];
                         }
-                        if (src == null) return;
+                        if (src == null) return result;
                         String s = src.toString();
-                        if (s == null || s.length() == 0) return;
-                        if (!isRecallSystemText(s)) return;
+                        if (s == null || s.length() == 0) return result;
+                        if (!isRecallSystemText(s)) return result;
 
-                        android.widget.TextView tv = (android.widget.TextView) p.thisObject;
-                        if (RECALL_UI_BUSY.contains(tv)) return;
+                        android.widget.TextView tv = (android.widget.TextView) chain.getThisObject();
+                        if (RECALL_UI_BUSY.contains(tv)) return result;
                         try { Config.load(); } catch (Throwable ignored) {}
 
                         String sender = recallSenderFromUi(s);
@@ -389,13 +404,13 @@ public class AntiRecall {
                                 tv.setVisibility(android.view.View.VISIBLE);
                                 fixRecallRowHeight(tv);
                                 tv.setText(orig.trim());
-                                return;
+                                return result;
                             }
                             // ── 路径 B：无存档 → 撤回提示只用配置文案，不用存档内容 ──
                             if (!Config.showRecallHint) {
                                 tv.setVisibility(android.view.View.GONE);
                                 tv.setHeight(0);
-                                return;
+                                return result;
                             }
                             tv.setVisibility(android.view.View.VISIBLE);
                             fixRecallRowHeight(tv);
@@ -412,19 +427,21 @@ public class AntiRecall {
                             RECALL_UI_BUSY.remove(tv);
                         }
                     } catch (Throwable ignored) {}
+                    return result;
                 }
             };
             try {
-                XposedHelpers.findAndHookMethod(android.widget.TextView.class, "setText",
-                        CharSequence.class, android.widget.TextView.BufferType.class, h);
+                HookRuntime.hookMethod(android.widget.TextView.class, "setText",
+                        new Class<?>[]{CharSequence.class, android.widget.TextView.BufferType.class},
+                        "recallui.setText.2args", h);
             } catch (Throwable ignored) { }
             try {
-                XposedHelpers.findAndHookMethod(android.widget.TextView.class, "setText",
-                        CharSequence.class, h);
+                HookRuntime.hookMethod(android.widget.TextView.class, "setText",
+                        new Class<?>[]{CharSequence.class}, "recallui.setText.1arg", h);
             } catch (Throwable ignored) { }
-            XposedBridge.log("[fucklark] 后台撤回 统计/还原/提示 已 hook (进程 " + currentProcessName() + ")");
+            ModuleLog.log("[fucklark] 后台撤回 统计/还原/提示 已 hook (进程 " + currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] recall UI restore hook failed: " + t);
+            ModuleLog.log("[fucklark] recall UI restore hook failed: " + t);
         }
     }
 
@@ -469,21 +486,25 @@ public class AntiRecall {
     // 纯客户端渲染, 去掉不影响对方、不改数据。按包名前缀判定(类名被混淆成单字母, 但包名 watermark 未混淆, 跨版本稳)。
     static void installWatermarkHook() {
         try {
-            XposedHelpers.findAndHookMethod(android.view.View.class, "setForeground",
-                    android.graphics.drawable.Drawable.class, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
+            HookRuntime.hookMethod(android.view.View.class, "setForeground",
+                    new Class<?>[]{android.graphics.drawable.Drawable.class}, "dewatermark.setForeground",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    // legacy before-hook：命中水印 drawable 时置 args[0]=null，原方法继续(proceed 改参)
+                    Object[] args = chain.getArgs().toArray();
                     try {
-                        Object d = p.args[0];
+                        Object d = args[0];
                         if (Config.dewatermark && d != null
                                 && d.getClass().getName().startsWith("com.ss.android.lark.watermark.")) {
-                            p.args[0] = null;   // 不设水印前景 -> 聊天页/弹窗/文件预览覆盖层全不画
+                            args[0] = null;   // 不设水印前景 -> 聊天页/弹窗/文件预览覆盖层全不画
                         }
                     } catch (Throwable ignored) {}
+                    return chain.proceed(args);
                 }
             });
-            XposedBridge.log("[fucklark] 去水印: View.setForeground 已 hook (进程 " + currentProcessName() + ")");
+            ModuleLog.log("[fucklark] 去水印: View.setForeground 已 hook (进程 " + currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] watermark hook install failed: " + t);
+            ModuleLog.log("[fucklark] watermark hook install failed: " + t);
         }
     }
 
@@ -536,12 +557,12 @@ public class AntiRecall {
 
         System.load(out.getAbsolutePath());
         NATIVE_STARTED = true;
-        XposedBridge.log("[antirecall] native lib loaded: " + out.getAbsolutePath());
+        ModuleLog.log("[antirecall] native lib loaded: " + out.getAbsolutePath());
 
         // 当前目标包的 files dir → 配置/日志/native 日志都按它走(国内/国际版自适应)。
         // 必须在 Config.load()/Diag.w() 之前, 否则它们用的还是 null 路径。
         File filesDir = new File(dataDir, "files");
-        try { Config.setFilesDir(filesDir); Diag.setFilesDir(filesDir); } catch (Throwable t) { XposedBridge.log("[antirecall] setFilesDir err " + t); }
+        try { Config.setFilesDir(filesDir); Diag.setFilesDir(filesDir); } catch (Throwable t) { ModuleLog.log("[antirecall] setFilesDir err " + t); }
         // native 写退群/被踢日志时也进当前账号子目录
         try {
             AccountPaths.bind(null, PKG);
@@ -563,11 +584,11 @@ public class AntiRecall {
             Config.loadAndAnnounce();
             nativeSetRecall(Config.antirecall); nativeSetDiag(Config.diaglog);
             nativeSetKeepKicked(Config.keepkicked); nativeSetLeaveNotify(Config.leavenotify);
-            XposedBridge.log("[fucklark] antirecall=" + Config.antirecall + " resign=" + Config.resign
+            ModuleLog.log("[fucklark] antirecall=" + Config.antirecall + " resign=" + Config.resign
                     + " antiread=" + Config.antiread + " diaglog=" + Config.diaglog
                     + " keepkicked=" + Config.keepkicked + " leavenotify=" + Config.leavenotify
                     + " updatedAt=" + Config.updatedAt());
-        } catch (Throwable t) { XposedBridge.log("[fucklark] config init err " + t); }
+        } catch (Throwable t) { ModuleLog.log("[fucklark] config init err " + t); }
 
         // 诊断日志: 环境信息(每次冷启动一条, 仅在诊断开关开启时写)。飞书 versionName 在 Installer 线程解析。
         Diag.w("==== 模块启动 v" + MODULE_VERSION
@@ -586,7 +607,7 @@ public class AntiRecall {
             android.content.Context ctx = null;
             for (int k = 0; k < 40; k++) {
                 try {
-                    Object app = XposedHelpers.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+                    Object app = Reflect.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
                     ctx = (android.content.Context) app;
                 } catch (Throwable ignored) {}
                 if (ctx != null) break;
@@ -597,7 +618,7 @@ public class AntiRecall {
             // ★ 签名自校验: 被重打包(重签名)则禁用核心功能, 不装 native hook。
             TAMPER = checkSignature(ctx) ? 1 : 2;
             if (TAMPER == 2) {
-                XposedBridge.log("[fucklark] 签名不匹配, 疑似被篡改/重打包 -> 禁用防撤回/防已读");
+                ModuleLog.log("[fucklark] 签名不匹配, 疑似被篡改/重打包 -> 禁用防撤回/防已读");
                 Diag.w("⚠️ 签名校验失败: 本模块被篡改/重打包, 已禁用核心功能。请从官方渠道重新下载。");
                 return;   // 不进入 native 安装循环 -> 无防撤回
             }
@@ -605,7 +626,7 @@ public class AntiRecall {
             for (int i = 0; i < 800; i++) {       // ~120s @150ms
                 try {
                     if (tryInstall()) {
-                        XposedBridge.log("[antirecall] native hook installed (after " + i + " tries)");
+                        ModuleLog.log("[antirecall] native hook installed (after " + i + " tries)");
                         Diag.w("防撤回: sqlite3_step hook 已安装 (第 " + i + " 次尝试命中 libsqlcipher) ✓");
                         // 安装成功后转入维护循环: 周期重打被反篡改还原的 liblark hook + 轮询退群提醒.
                         android.os.Handler mh = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -622,12 +643,12 @@ public class AntiRecall {
                         }
                     }
                 } catch (Throwable e) {
-                    XposedBridge.log("[antirecall] tryInstall error: " + e);
+                    ModuleLog.log("[antirecall] tryInstall error: " + e);
                     return;
                 }
                 try { Thread.sleep(150); } catch (InterruptedException e) { return; }
             }
-            XposedBridge.log("[antirecall] tryInstall gave up (libsqlcipher not seen in time)");
+            ModuleLog.log("[antirecall] tryInstall gave up (libsqlcipher not seen in time)");
             Diag.w("防撤回: ✗ 安装失败 —— 120s 内未见 libsqlcipher.so (飞书可能改了加密库/该机型未加载/版本不兼容)");
         }
     }
@@ -659,17 +680,17 @@ public class AntiRecall {
     static final String SDK_CLASS = "com.bytedance.lark.sdk.Sdk";
 
     static void alog(String m) {            // 优先专属 tag antiread-j (非主进程 native 未加载时 fallback)
-        try { nativeLog(m); } catch (Throwable t) { XposedBridge.log("[antiread] " + m); }
+        try { nativeLog(m); } catch (Throwable t) { ModuleLog.log("[antiread] " + m); }
     }
 
     static void installAntiRead(ClassLoader cl) {
         if (ANTIREAD_INSTALLED) return;
-        Class<?> sdk = XposedHelpers.findClass(SDK_CLASS, cl);
+        Class<?> sdk = Reflect.findClass(SDK_CLASS, cl);
         InvokeHook h = new InvokeHook();
         // 钩所有 invoke* 重载 (含带 Command 对象的高层方法). native _invoke 的 int 恒为 10000(噪音).
         String[] names = {"invoke", "invokeV2", "invokeOpt", "invokeAsync", "invokeAsyncV2", "invokeAsyncOpt"};
         for (String m : names) {
-            try { XposedBridge.hookAllMethods(sdk, m, h); } catch (Throwable t) { alog(m + " hookAll miss: " + t); }
+            try { HookRuntime.hookAllMethods(sdk, m, "antiread.invoke." + m, h); } catch (Throwable t) { alog(m + " hookAll miss: " + t); }
         }
         ANTIREAD_INSTALLED = true;
         alog("installed hookAll on Sdk.invoke* (drop=" + ANTIREAD_DROP + ")");
@@ -716,10 +737,10 @@ public class AntiRecall {
         catch (Throwable t) { alog("antiread2: " + READ_REQ_CLASS + " 不存在(版本变了?): " + t); return; }
         // 构造函数参数序(Wire build()): (message_ids[0], channel[1], max_position[2], thread_id[3],
         //   _[4], max_position_badge_count[5], _[6], fold_ids[7], [unknownFields[8]]).
-        XposedBridge.hookAllConstructors(reqc, new ReadReqHook());
+        HookRuntime.hookAllConstructors(reqc, "antiread2.readreq", new ReadReqHook());
         // 发送开窗: 复刻桌面吾乐吧/Linux —— 纯浏览未读, 回复后才把可视消息标已读。
         for (String sc : SEND_REQ_CLASSES) {
-            try { XposedBridge.hookAllConstructors(cl.loadClass(sc), new SendReqHook());
+            try { HookRuntime.hookAllConstructors(cl.loadClass(sc), "antiread2.sendreq." + sc, new SendReqHook());
                   alog("antiread2: 发送开窗 hook " + sc); }
             catch (Throwable t) { alog("antiread2: 发送类 " + sc + " 不存在: " + t); }
         }
@@ -728,18 +749,21 @@ public class AntiRecall {
     }
 
     // 你发消息时开 2.5s 已读窗口(与已读请求同进程/同层, 时间窗区分"被动浏览 vs 回复")。
-    static class SendReqHook extends XC_MethodHook {
-        @Override protected void beforeHookedMethod(MethodHookParam param) {
+    static class SendReqHook implements XposedInterface.Hooker {
+        @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
             READ_WINDOW = System.currentTimeMillis() + READ_WINDOW_MS;
+            return chain.proceed();
         }
     }
 
-    static class ReadReqHook extends XC_MethodHook {
+    static class ReadReqHook implements XposedInterface.Hooker {
         @Override
-        protected void beforeHookedMethod(MethodHookParam param) {
+        public Object intercept(XposedInterface.Chain chain) throws Throwable {
+            // legacy before-hook 只改参不短路: 先取可变副本, 回调异常也不阻断原构造(与
+            // legacy protective 下一致: 已做的修改随 proceed 生效)。
+            Object[] a = chain.getArgs().toArray();
             try {
-                Object[] a = param.args;
-                if (a == null || a.length < 8) return;
+                if (a == null || a.length < 8) return chain.proceed(a);
                 boolean inSendWindow = System.currentTimeMillis() < READ_WINDOW;
                 String ch = channelId(a.length > 1 ? a[1] : null);
                 int midsBefore = (a[0] instanceof java.util.List) ? ((java.util.List) a[0]).size() : -1;
@@ -778,6 +802,7 @@ public class AntiRecall {
                 }
             } catch (Throwable ignore) {
             }
+            return chain.proceed(a);
         }
     }
 
@@ -786,21 +811,22 @@ public class AntiRecall {
         return false;
     }
 
-    static class InvokeHook extends XC_MethodHook {
+    static class InvokeHook implements XposedInterface.Hooker {
         @Override
-        protected void beforeHookedMethod(MethodHookParam param) {
+        public Object intercept(XposedInterface.Chain chain) throws Throwable {
             try {
-                if (param.args == null || param.args.length == 0) return;
-                Object a0 = param.args[0];
+                Object[] args = chain.getArgs().toArray();
+                if (args == null || args.length == 0) return chain.proceed(args);
+                Object a0 = args[0];
                 int cmd;
                 if (a0 instanceof Integer) {
                     cmd = (Integer) a0;
                 } else if (a0 != null) {
                     // Command 对象 -> getValue()
-                    try { cmd = (Integer) XposedHelpers.callMethod(a0, "getValue"); }
-                    catch (Throwable t) { return; }   // 不是 Command, 跳过
-                } else return;
-                if (cmd == 10000) return;             // native 包装哨兵噪音, 忽略
+                    try { cmd = (Integer) Reflect.callMethod(a0, "getValue"); }
+                    catch (Throwable t) { return chain.proceed(args); }   // 不是 Command, 跳过
+                } else return chain.proceed(args);
+                if (cmd == 10000) return chain.proceed(args);             // native 包装哨兵噪音, 忽略
                 // 诊断: 记录命令(限量), 找开聊天触发的读命令
                 int c = INVOKE_LOG_COUNT.incrementAndGet();
                 if (c <= 4000) {
@@ -809,50 +835,52 @@ public class AntiRecall {
                             + (cmd == CMD_UPDATE_MESSAGES_ME_READ ? " <UPDATE_MESSAGES_ME_READ>" : ""));
                 }
                 if (ANTIREAD_DROP && cmd == CMD_UPDATE_MESSAGES_ME_READ) {
-                    param.setResult(null);
                     alog("DROPPED UPDATE_MESSAGES_ME_READ");
+                    return null;   // legacy setResult(null) 短路
                 }
             } catch (Throwable ignore) {
             }
+            return chain.proceed();
         }
     }
 
     static String textOf(Object content) {
         if (content == null) return null;
         try {
-            Object s = XposedHelpers.callMethod(content, "getText");
+            Object s = Reflect.callMethod(content, "getText");
             return s == null ? null : s.toString();
         } catch (Throwable t) {
             return null;
         }
     }
 
-    static class MapperHook extends XC_MethodHook {
+    static class MapperHook implements XposedInterface.Hooker {
         final Object normal;
         MapperHook(Object normal) { this.normal = normal; }
 
         @Override
-        protected void beforeHookedMethod(MethodHookParam param) {
+        public Object intercept(XposedInterface.Chain chain) throws Throwable {
             try {
-                if (TAMPER == 2) return;   // 被篡改则不还原撤回内容
-                Object mi = param.args[0];
-                if (mi == null) return;
-                Object m = XposedHelpers.callMethod(mi, "getMessage");
-                if (m == null) return;
-                String id = String.valueOf(XposedHelpers.callMethod(m, "getId"));
-                Object c = XposedHelpers.callMethod(m, "getContent");
+                if (TAMPER == 2) return chain.proceed();   // 被篡改则不还原撤回内容
+                Object mi = chain.getArgs().get(0);
+                if (mi == null) return chain.proceed();
+                Object m = Reflect.callMethod(mi, "getMessage");
+                if (m == null) return chain.proceed();
+                String id = String.valueOf(Reflect.callMethod(m, "getId"));
+                Object c = Reflect.callMethod(m, "getContent");
                 String t = textOf(c);
                 if (t != null && t.length() > 0) {
                     CACHE.put(id, c);
                 } else if (CACHE.containsKey(id)) {
                     Object cached = CACHE.get(id);
-                    XposedHelpers.callMethod(m, "setMessageContent", cached);
+                    Reflect.callMethod(m, "setMessageContent", cached);
                     if (normal != null) {
-                        try { XposedHelpers.callMethod(m, "setStatus", normal); } catch (Throwable ignore) {}
+                        try { Reflect.callMethod(m, "setStatus", normal); } catch (Throwable ignore) {}
                     }
                 }
             } catch (Throwable ignore) {
             }
+            return chain.proceed();
         }
     }
 }

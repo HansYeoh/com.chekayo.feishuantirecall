@@ -12,13 +12,10 @@ import java.util.zip.ZipFile;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
-
 import com.chekayo.feishuantirecall.Config;
 import com.chekayo.feishuantirecall.AntiRecall;
 import com.chekayo.feishuantirecall.ProfileBulk;
+import com.chekayo.feishuantirecall.Reflect;
 
 /**
  * 飞书离职统计 (com.ss.android.lark)
@@ -76,8 +73,8 @@ public class ResignTracker {
                     if (ctx != null) break;
                     sleep(150);
                 }
-                if (ctx == null) { XposedBridge.log(TAG + ": 拿不到 app context, 放弃"); return; }
-                try { start(ctx); } catch (Throwable t) { XposedBridge.log(TAG + ": start err " + t); }
+                if (ctx == null) { com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": 拿不到 app context, 放弃"); return; }
+                try { start(ctx); } catch (Throwable t) { com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": start err " + t); }
             }
         }, "lark-resign-boot");
         boot.setDaemon(true);
@@ -87,39 +84,39 @@ public class ResignTracker {
     static Context currentAppContext() {
         try {
             Class<?> at = Class.forName("android.app.ActivityThread");
-            Object app = XposedHelpers.callStaticMethod(at, "currentApplication");
+            Object app = Reflect.callStaticMethod(at, "currentApplication");
             return app instanceof Context ? (Context) app : null;
         } catch (Throwable t) { return null; }
     }
 
     static void start(final Context ctx) throws Exception {
         // 配置按当前目标包走(国内/国际版自适应; 与 AntiRecall 同主进程, 幂等)
-        try { Config.setFilesDir(ctx.getFilesDir()); } catch (Throwable t) { XposedBridge.log(TAG + ": setFilesDir err " + t); }
+        try { Config.setFilesDir(ctx.getFilesDir()); } catch (Throwable t) { com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": setFilesDir err " + t); }
         // 探测当前登录账号：档案/离职数据按账号隔离，避免多账号混写
         try {
             com.chekayo.feishuantirecall.AccountPaths.bind(ctx, PKG);
-        } catch (Throwable t) { XposedBridge.log(TAG + ": AccountPaths.bind err " + t); }
+        } catch (Throwable t) { com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": AccountPaths.bind err " + t); }
 
         // 抽 native .so 到私有目录并加载
         File dataDir = ctx.getFilesDir().getParentFile();
         try {
             com.chekayo.feishuantirecall.AccountPaths.bind(ctx, PKG);
-        } catch (Throwable t) { XposedBridge.log(TAG + ": AccountPaths.bind err " + t); }
+        } catch (Throwable t) { com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": AccountPaths.bind err " + t); }
         File so = new File(new File(dataDir, "resign_tracker_lib"), "libresign.so");
         so.getParentFile().mkdirs();
         extractSo(so);
         System.load(so.getAbsolutePath());
-        XposedBridge.log(TAG + ": native loaded " + so.getAbsolutePath()
+        com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": native loaded " + so.getAbsolutePath()
                 + " uid=" + com.chekayo.feishuantirecall.AccountPaths.currentUid);
 
         final Context appCtx = ctx;
         Thread t = new Thread(new Runnable() {
             @Override public void run() {
                 for (int i = 0; i < 600; i++) {
-                    try { if (nativeInit()) break; } catch (Throwable e) { XposedBridge.log(TAG + ": nativeInit err " + e); return; }
+                    try { if (nativeInit()) break; } catch (Throwable e) { com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": nativeInit err " + e); return; }
                     sleep(150);
                 }
-                XposedBridge.log(TAG + ": nativeInit done, 等待 contact.db 句柄...");
+                com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": nativeInit done, 等待 contact.db 句柄...");
                 long[] delays = {8000, 15000, 30000, 60000, 120000, 300000};
                 int idx = 0;
                 int profTick = 0;
@@ -139,7 +136,7 @@ public class ResignTracker {
                         if (outDir != null && !outDir.isDirectory()) outDir.mkdirs();
                         // 切号后新账号目录首次使用时也迁移一次旧全局数据(幂等, 有 marker)
                         try { com.chekayo.feishuantirecall.AccountPaths.migrateLegacy(outDir.getParentFile()); }
-                        catch (Throwable me) { XposedBridge.log(TAG + ": migrateLegacy err " + me); }
+                        catch (Throwable me) { com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": migrateLegacy err " + me); }
 
                         File accAll = new File(outDir, "resigned_all.json");
                         File accSnap = new File(outDir, "resigned_latest.json");
@@ -157,7 +154,7 @@ public class ResignTracker {
                         }
                         if (rc >= 0) {
                             int merged = mergeInto(accAll, accSnap);
-                            XposedBridge.log(TAG + ": 离职快照=" + rc + " 累计=" + merged
+                            com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": 离职快照=" + rc + " 累计=" + merged
                                     + " uid=" + uid + " -> " + accAll.getAbsolutePath());
                             if (merged >= 0) {
                                 try { com.chekayo.feishuantirecall.ArchiveSync.pushAll(); } catch (Throwable ignored) {}
@@ -172,11 +169,11 @@ public class ResignTracker {
                                 for (int k = 0; k < 60; k++) { prc = nativeProfileResult(); if (prc >= 0) break; sleep(500); }
                                 if (prc >= 0) {
                                     int n = ProfileBulk.merge(accProfJl, accProf);
-                                    XposedBridge.log(TAG + ": V3富资料 dump=" + prc + " 并入=" + n + " -> " + accProf.getAbsolutePath());
+                                    com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": V3富资料 dump=" + prc + " 并入=" + n + " -> " + accProf.getAbsolutePath());
                                     try { com.chekayo.feishuantirecall.ArchiveSync.pushProfiles(); } catch (Throwable ignored) {}
                                     accProfJl.delete();
                                 }
-                            } catch (Throwable pe) { XposedBridge.log(TAG + ": profile dump err " + pe); }
+                            } catch (Throwable pe) { com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": profile dump err " + pe); }
                         }
 
                         // 4) 全量花名册 → 当前账号 profiles.json
@@ -187,14 +184,14 @@ public class ResignTracker {
                                 for (int k = 0; k < 60; k++) { rrc = nativeRosterResult(); if (rrc >= 0) break; sleep(500); }
                                 if (rrc >= 0) {
                                     int n = ProfileBulk.mergeRoster(accRosterJl, accProf);
-                                    XposedBridge.log(TAG + ": 全量花名册 dump=" + rrc + " 并入=" + n
+                                    com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": 全量花名册 dump=" + rrc + " 并入=" + n
                                             + " uid=" + uid + " -> " + accProf.getAbsolutePath());
                                     try { com.chekayo.feishuantirecall.ArchiveSync.pushProfiles(); } catch (Throwable ignored) {}
                                     accRosterJl.delete();
                                 }
-                            } catch (Throwable re) { XposedBridge.log(TAG + ": roster dump err " + re); }
+                            } catch (Throwable re) { com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": roster dump err " + re); }
                         }
-                    } catch (Throwable e) { XposedBridge.log(TAG + ": dump err " + e); }
+                    } catch (Throwable e) { com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": dump err " + e); }
                     sleep(delays[Math.min(idx++, delays.length - 1)]);
                 }
             }
@@ -206,7 +203,7 @@ public class ResignTracker {
             @Override public void run() {
                 try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
                 try { com.chekayo.feishuantirecall.ArchiveSync.pushAll(); }
-                catch (Throwable t) { XposedBridge.log(TAG + ": startup archive push err " + t); }
+                catch (Throwable t) { com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": startup archive push err " + t); }
             }
         }, "lark-archive-push");
         pushOnce.setDaemon(true);
@@ -236,7 +233,7 @@ public class ResignTracker {
             writeText(allFile, all.toString(1));
             return all.length();
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": merge err " + t);
+            com.chekayo.feishuantirecall.ModuleLog.log(TAG + ": merge err " + t);
             return -1;
         }
     }

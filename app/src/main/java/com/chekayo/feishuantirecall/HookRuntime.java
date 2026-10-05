@@ -10,8 +10,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import io.github.libxposed.api.XposedInterface;
 
 /**
- * hook 注册与登记中心：替代 XposedBridge.hookMethod / hookAllMethods / hookAllConstructors
- * 与 XposedHelpers.findAndHookMethod（现存 40 处注册点，阶段 4 逐点切换）。
+ * hook 注册与登记中心：替代 legacy API 的四类 hook 注册
+ * （hookMethod / findAndHookMethod / hookAllMethods / hookAllConstructors，
+ * 40 处注册点已于阶段 4 全部切换）。
  *
  * 核心调用是 API 102 的拦截器链：
  * {@code module.hook(executable).intercept(hooker)}；
@@ -134,7 +135,7 @@ public final class HookRuntime {
     // ── 便捷入口（阶段 4 逐点切换用） ──────────────────────────────────
 
     /**
-     * 等价 XposedHelpers.findAndHookMethod(Class, name, paramTypes...)：精确查找后安装。
+     * 等价 legacy 的 findAndHookMethod(Class, name, paramTypes...)：精确查找后安装。
      * 找不到方法抛 NoSuchMethodError（带目标签名；legacy 抛受检 NoSuchMethodException，
      * 现役注册点全部 try/catch Throwable，行为不受影响）。
      */
@@ -159,7 +160,7 @@ public final class HookRuntime {
     }
 
     /**
-     * 等价 XposedBridge.hookAllMethods：形参通配地 hook 本类<b>全部</b>同名 declared methods
+     * 等价 legacy 的 hookAllMethods：形参通配地 hook 本类<b>全部</b>同名 declared methods
      * （零参/带参都覆盖，不含继承，语义与 legacy 一致）。
      * 每个方法的 logicalId 为 prefix#0、prefix#1…；无匹配时返回空表（与 legacy 一致，不抛异常）。
      */
@@ -175,7 +176,7 @@ public final class HookRuntime {
         return out;
     }
 
-    /** 等价 XposedBridge.hookAllConstructors：形参通配地 hook 全部 declared constructors（含带参），id 规则同上。 */
+    /** 等价 legacy 的 hookAllConstructors：形参通配地 hook 全部 declared constructors（含带参），id 规则同上。 */
     public static List<InstalledHook> hookAllConstructors(Class<?> clazz,
                                                           String logicalIdPrefix, XposedInterface.Hooker hooker) {
         List<Constructor<?>> found = Reflect.findDeclaredConstructors(clazz);

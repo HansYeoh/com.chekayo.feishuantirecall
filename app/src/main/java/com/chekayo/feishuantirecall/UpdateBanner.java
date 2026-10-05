@@ -9,9 +9,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.libxposed.api.XposedInterface;
 
 /**
  * 主页顶部更新横幅 —— 参考 XAuxiliary: 往宿主 MainActivity 内容区(android.R.id.content)顶部注入一条
@@ -28,19 +26,22 @@ public class UpdateBanner {
         if (INSTALLED) return;
         INSTALLED = true;
         try {
-            XposedHelpers.findAndHookMethod("com.ss.android.lark.main.app.MainActivity", cl,
-                    "onResume", new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam p) {
+            HookRuntime.findAndHookMethod("com.ss.android.lark.main.app.MainActivity", cl,
+                    "onResume", new Class<?>[0], "updatebanner.onResume",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    Object result = chain.proceed();
                     try {
-                        if (!Config.updatebanner || checkedThisRun) return;
+                        if (!Config.updatebanner || checkedThisRun) return result;
                         checkedThisRun = true;
-                        checkAsync((Activity) p.thisObject);
+                        checkAsync((Activity) chain.getThisObject());
                     } catch (Throwable ignored) {}
+                    return result;
                 }
             });
-            XposedBridge.log("[fucklark] 更新横幅: MainActivity.onResume 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
+            ModuleLog.log("[fucklark] 更新横幅: MainActivity.onResume 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] update banner install failed: " + t);
+            ModuleLog.log("[fucklark] update banner install failed: " + t);
         }
     }
 
@@ -131,7 +132,7 @@ public class UpdateBanner {
             content.addView(bar, new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP));
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] show update banner failed: " + t);
+            ModuleLog.log("[fucklark] show update banner failed: " + t);
         }
     }
 

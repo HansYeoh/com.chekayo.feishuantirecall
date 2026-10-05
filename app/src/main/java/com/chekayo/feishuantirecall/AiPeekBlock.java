@@ -4,9 +4,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.libxposed.api.XposedInterface;
 
 /**
  * 屏蔽会话内 AI 总结「消息速览」浮层（整条，含边框）。
@@ -45,7 +43,7 @@ public final class AiPeekBlock {
             long now = System.currentTimeMillis();
             if (now - lastHitLogAt < 800) return;
             lastHitLogAt = now;
-            XposedBridge.log("[fucklark] 消息速览命中#" + hitCount + " via=" + via
+            ModuleLog.log("[fucklark] 消息速览命中#" + hitCount + " via=" + via
                     + " " + detail + " (进程 " + AntiRecall.currentProcessName() + ")");
         } catch (Throwable ignored) {}
     }
@@ -53,70 +51,80 @@ public final class AiPeekBlock {
     public static void install() {
         // ① addView：速览浮层挂树前拦掉
         try {
-            XC_MethodHook addHook = new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
+            XposedInterface.Hooker addHook = new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    // legacy: 条件不命中放行原方法；命中 setResult(null) 拦下 addView(void 短路)
+                    Object[] args = chain.getArgs().toArray();
                     try {
-                        if (!Config.blockaipeek) return;
-                        if (p.args == null || !(p.args[0] instanceof View)) return;
-                        View child = (View) p.args[0];
+                        if (!Config.blockaipeek) return chain.proceed(args);
+                        if (!(args[0] instanceof View)) return chain.proceed(args);
+                        View child = (View) args[0];
                         // 只拦确认是速览节点本身（含 peek 类名/文案）；shell 隐藏由 setText→hideTipShell 负责
                         if (isPeekNode(child)) {
                             markBlocked(child);
                             hit("addView", "拦下浮层 class=" + child.getClass().getName());
-                            p.setResult(null);
+                            return null;
                         }
                     } catch (Throwable ignored) {}
+                    return chain.proceed(args);
                 }
             };
-            try { XposedHelpers.findAndHookMethod(ViewGroup.class, "addView", View.class, addHook); } catch (Throwable ignored) {}
-            try { XposedHelpers.findAndHookMethod(ViewGroup.class, "addView", View.class, int.class, addHook); } catch (Throwable ignored) {}
-            try { XposedHelpers.findAndHookMethod(ViewGroup.class, "addView", View.class, ViewGroup.LayoutParams.class, addHook); } catch (Throwable ignored) {}
-            try { XposedHelpers.findAndHookMethod(ViewGroup.class, "addView", View.class, int.class, ViewGroup.LayoutParams.class, addHook); } catch (Throwable ignored) {}
-            XposedBridge.log("[fucklark] 消息速览屏蔽: ViewGroup.addView 已 hook (进程 "
+            try { HookRuntime.hookMethod(ViewGroup.class, "addView", new Class<?>[]{View.class}, "aipeek.addView.1", addHook); } catch (Throwable ignored) {}
+            try { HookRuntime.hookMethod(ViewGroup.class, "addView", new Class<?>[]{View.class, int.class}, "aipeek.addView.2", addHook); } catch (Throwable ignored) {}
+            try { HookRuntime.hookMethod(ViewGroup.class, "addView", new Class<?>[]{View.class, ViewGroup.LayoutParams.class}, "aipeek.addView.3", addHook); } catch (Throwable ignored) {}
+            try { HookRuntime.hookMethod(ViewGroup.class, "addView", new Class<?>[]{View.class, int.class, ViewGroup.LayoutParams.class}, "aipeek.addView.4", addHook); } catch (Throwable ignored) {}
+            ModuleLog.log("[fucklark] 消息速览屏蔽: ViewGroup.addView 已 hook (进程 "
                     + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] peek addView hook failed: " + t);
+            ModuleLog.log("[fucklark] peek addView hook failed: " + t);
         }
 
         // ② setVisibility：仅速览节点/小壳 → GONE（大容器即使含速览也不动）
         try {
-            XposedHelpers.findAndHookMethod(View.class, "setVisibility", int.class, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
+            HookRuntime.hookMethod(View.class, "setVisibility", new Class<?>[]{int.class}, "aipeek.setVisibility",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    // legacy: 命中后 p.args[0]=GONE 且原方法继续(proceed 改参)
+                    Object[] args = chain.getArgs().toArray();
                     try {
-                        if (!Config.blockaipeek) return;
-                        int vis = (Integer) p.args[0];
-                        if (vis != View.VISIBLE) return;
-                        View v = (View) p.thisObject;
+                        if (!Config.blockaipeek) return chain.proceed(args);
+                        int vis = (Integer) args[0];
+                        if (vis != View.VISIBLE) return chain.proceed(args);
+                        View v = (View) chain.getThisObject();
                         // 仅拦已被 hideTipShell 标记的节点（由 setText 文案命中后标记）
                         boolean block = isBlocked(v);
-                        if (!block) return;
+                        if (!block) return chain.proceed(args);
                         markBlocked(v);
                         hit("setVisibility", "强制GONE class=" + v.getClass().getName());
-                        p.args[0] = View.GONE;
+                        args[0] = View.GONE;
                     } catch (Throwable ignored) {}
+                    return chain.proceed(args);
                 }
             });
-            XposedBridge.log("[fucklark] 消息速览屏蔽: View.setVisibility 已 hook (进程 "
+            ModuleLog.log("[fucklark] 消息速览屏蔽: View.setVisibility 已 hook (进程 "
                     + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] peek setVis hook failed: " + t);
+            ModuleLog.log("[fucklark] peek setVis hook failed: " + t);
         }
 
         // ③ setText：命中则清字 + 收壳（解决空框）
         try {
-            XC_MethodHook h = new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam p) {
+            XposedInterface.Hooker h = new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    // legacy after-hook：原方法先执行，回调异常不影响返回值
+                    Object result = chain.proceed();
                     try {
-                        if (!Config.blockaipeek) return;
+                        if (!Config.blockaipeek) return result;
+                        Object[] args = chain.getArgs().toArray();
                         CharSequence src = null;
-                        if (p.args != null && p.args.length > 0 && p.args[0] instanceof CharSequence) {
-                            src = (CharSequence) p.args[0];
+                        if (args.length > 0 && args[0] instanceof CharSequence) {
+                            src = (CharSequence) args[0];
                         }
-                        if (src == null) return;
+                        if (src == null) return result;
                         String s = src.toString();
-                        if (!isPeekText(s)) return;
-                        TextView tv = (TextView) p.thisObject;
-                        if (BUSY.contains(tv)) return;
+                        if (!isPeekText(s)) return result;
+                        TextView tv = (TextView) chain.getThisObject();
+                        if (BUSY.contains(tv)) return result;
                         BUSY.add(tv);
                         try {
                             String brief = s.trim();
@@ -127,20 +135,21 @@ public final class AiPeekBlock {
                             BUSY.remove(tv);
                         }
                     } catch (Throwable ignored) {}
+                    return result;
                 }
             };
             try {
-                XposedHelpers.findAndHookMethod(TextView.class, "setText",
-                        CharSequence.class, TextView.BufferType.class, h);
+                HookRuntime.hookMethod(TextView.class, "setText",
+                        new Class<?>[]{CharSequence.class, TextView.BufferType.class}, "aipeek.setText.2args", h);
             } catch (Throwable ignored) {}
             try {
-                XposedHelpers.findAndHookMethod(TextView.class, "setText",
-                        CharSequence.class, h);
+                HookRuntime.hookMethod(TextView.class, "setText",
+                        new Class<?>[]{CharSequence.class}, "aipeek.setText.1arg", h);
             } catch (Throwable ignored) {}
-            XposedBridge.log("[fucklark] 消息速览屏蔽: TextView.setText 已 hook (进程 "
+            ModuleLog.log("[fucklark] 消息速览屏蔽: TextView.setText 已 hook (进程 "
                     + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] peek setText hook failed: " + t);
+            ModuleLog.log("[fucklark] peek setText hook failed: " + t);
         }
     }
 

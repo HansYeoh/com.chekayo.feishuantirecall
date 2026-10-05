@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 反射工具：替代业务代码实际使用的 XposedHelpers 子集
+ * 反射工具：替代业务代码实际使用的 legacy 反射工具子集
  * （findClass / callMethod ×9 / callStaticMethod ×6 / getStaticObjectField ×2，
  * 外加 hook 注册所需的精确查找与按签名枚举）。
  *
@@ -20,7 +20,7 @@ import java.util.Map;
  * - 方法/字段查找沿父类上溯（callMethod 的 best-match 与 legacy 一致）；
  * - 参数匹配处理 primitive 装箱与加宽（int→long 等）以及 null 实参（只匹配引用型形参）；
  * - InvocationTargetException 解包为原始原因后抛出；找不到成员抛带目标类/方法信息的 Error；
- * - 不通过字符串反射调用任何 de.robv / legacy API。
+ * - 不通过字符串反射调用任何 legacy Xposed API。
  *
  * 已知与 legacy 的差异：按签名枚举（findDeclaredMethods/findDeclaredConstructors）
  * 只看本类 declared 成员、不上溯——这是刻意的，供 HookRuntime.hookAll* 保持
@@ -60,7 +60,7 @@ public final class Reflect {
     // ── 类查找 ──────────────────────────────────────────────────────────
 
     /**
-     * 等价 legacy XposedHelpers.findClass：支持 primitive 名（"int" 等）；
+     * 等价 legacy 反射工具的 findClass：支持 primitive 名（"int" 等）；
      * cl 为 null 时按 boot classloader 解析。失败抛 NoClassDefFoundError（带类名与 loader 信息）。
      */
     public static Class<?> findClass(String className, ClassLoader cl) {
@@ -79,7 +79,7 @@ public final class Reflect {
     // ── 精确查找（沿父类上溯） ─────────────────────────────────────────
 
     /**
-     * 等价 legacy XposedHelpers.findMethodExact：名字与形参表精确匹配
+     * 等价 legacy 反射工具的 findMethodExact：名字与形参表精确匹配
      * （primitive 与其包装类视为等价），沿父类上溯。找不到抛 NoSuchMethodException。
      */
     public static Method findMethodExact(Class<?> clazz, String methodName, Class<?>... parameterTypes)
@@ -156,7 +156,7 @@ public final class Reflect {
 
     // ── 调用 ────────────────────────────────────────────────────────────
 
-    /** 等价 legacy XposedHelpers.callMethod：best-match + 解包原始异常。 */
+    /** 等价 legacy 反射工具的 callMethod：best-match + 解包原始异常。 */
     public static Object callMethod(Object receiver, String methodName, Object... args) {
         if (receiver == null) {
             throw new NullPointerException("Reflect.callMethod: receiver null, method=" + methodName);
@@ -165,7 +165,7 @@ public final class Reflect {
     }
 
     /**
-     * 等价 legacy XposedHelpers.callStaticMethod。
+     * 等价 legacy 反射工具的 callStaticMethod。
      * 候选只在 static 方法中选择：同名形参兼容的实例重载同时存在时不至于选中后以
      * {@code invoke(null, …)} 触发 NPE。
      */
@@ -241,7 +241,7 @@ public final class Reflect {
 
     // ── 静态字段 ────────────────────────────────────────────────────────
 
-    /** 等价 legacy XposedHelpers.getStaticObjectField：沿父类找字段，找不到抛 NoSuchFieldError。 */
+    /** 等价 legacy 反射工具的 getStaticObjectField：沿父类找字段，找不到抛 NoSuchFieldError。 */
     public static Object getStaticObjectField(Class<?> clazz, String fieldName) {
         try {
             return findField(clazz, fieldName).get(null);

@@ -2,9 +2,7 @@ package com.chekayo.feishuantirecall;
 
 import java.lang.reflect.Method;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.libxposed.api.XposedInterface;
 
 /**
  * 解除「保密模式」限制 —— 飞书企业「保密模式」(代码里叫 RestrictedMode)会禁止会话内复制/转发/下载/截屏/存表情,
@@ -38,15 +36,16 @@ public class RestrictedModeUnlock {
         try {
             Class<?> setting = cl.loadClass("com.ss.android.lark.chat.entity.chat.Chat$RestrictedModeSetting");
             Method m = setting.getDeclaredMethod("getSwitch");
-            XposedBridge.hookMethod(m, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
-                    if (Config.restrictunlock) p.setResult(false);   // 保密开关=关 -> 复制/转发/下载等全放行
+            HookRuntime.hook(m, "restricted.getSwitch", new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    if (Config.restrictunlock) return Boolean.FALSE;   // 保密开关=关 -> 复制/转发/下载等全放行
+                    return chain.proceed();
                 }
             });
-            XposedBridge.log("[fucklark] 解除保密模式限制: Chat$RestrictedModeSetting.getSwitch 已 hook (进程 "
+            ModuleLog.log("[fucklark] 解除保密模式限制: Chat$RestrictedModeSetting.getSwitch 已 hook (进程 "
                     + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] restricted-mode unlock(getSwitch) install failed: " + t);
+            ModuleLog.log("[fucklark] restricted-mode unlock(getSwitch) install failed: " + t);
         }
 
         // ② 兜底: 逐消息 disabledAction 门禁拦截器 -> 强制 false(不拦)
@@ -59,17 +58,13 @@ public class RestrictedModeUnlock {
                 if (m.getReturnType() != boolean.class) continue;
                 Class<?>[] ps = m.getParameterTypes();
                 if (ps.length == 0 || ps[0] != actionType) continue;   // boolean (MessageActionType, ...)
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
-                    @Override protected void beforeHookedMethod(MethodHookParam p) {
-                        if (Config.restrictunlock) p.setResult(false);   // 不拦截 -> 菜单项恢复可用、不弹 toast
-                    }
-                });
+                HookRuntime.hook(m, "restricted.interceptor#" + hooked, FALSE_GATE);
                 hooked++;
             }
-            XposedBridge.log("[fucklark] 解除保密模式限制: MessageRestrictedActionInterceptor 已 hook " + hooked
+            ModuleLog.log("[fucklark] 解除保密模式限制: MessageRestrictedActionInterceptor 已 hook " + hooked
                     + " 个门禁方法 (进程 " + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] restricted-mode unlock(interceptor) install failed: " + t);
+            ModuleLog.log("[fucklark] restricted-mode unlock(interceptor) install failed: " + t);
         }
 
         // ③ 屏蔽复制审计 -> 真正无痕(仅 7.70 定位):
@@ -86,17 +81,13 @@ public class RestrictedModeUnlock {
                 if (m.getReturnType() != void.class) continue;
                 Class<?>[] ps = m.getParameterTypes();
                 if (ps.length != 2 || ps[1] != msgType) continue;   // void a(ActionContext, Message$Type)
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
-                    @Override protected void beforeHookedMethod(MethodHookParam p) {
-                        if (Config.restrictunlock) p.setResult(null);   // 跳过审计上报
-                    }
-                });
+                HookRuntime.hook(m, "restricted.copyaudit#" + hooked, VOID_GATE_RESTRICT);
                 hooked++;
             }
-            XposedBridge.log("[fucklark] 屏蔽复制审计: CopyActionAuditUtil(q) 已 hook " + hooked
+            ModuleLog.log("[fucklark] 屏蔽复制审计: CopyActionAuditUtil(q) 已 hook " + hooked
                     + " 个方法 (进程 " + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] copy-audit suppress install failed: " + t);
+            ModuleLog.log("[fucklark] copy-audit suppress install failed: " + t);
         }
 
         // ④ 截图不上报 -> 让企业「设备审计」的截图检测器永不启动(仅 7.70 定位):
@@ -105,14 +96,17 @@ public class RestrictedModeUnlock {
         //    直接 no-op onActivityResumed -> 检测器永不启动 -> 截图不被检测、更不上报。跟 FLAG_SECURE 无关, 与强制截图模块互补。
         //    gc6.a / onActivityResumed 均为真实运行时名(Java 类无 Kotlin 元数据)。跟随 Config.screenshotnoaudit。
         try {
-            XposedHelpers.findAndHookMethod("gc6.a", cl, "onActivityResumed", android.app.Activity.class, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
-                    if (Config.screenshotnoaudit) p.setResult(null);   // 不启动截图检测器
+            HookRuntime.findAndHookMethod("gc6.a", cl, "onActivityResumed",
+                    new Class<?>[]{android.app.Activity.class}, "restricted.screenshot.onActivityResumed",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    if (Config.screenshotnoaudit) return null;   // 不启动截图检测器
+                    return chain.proceed();
                 }
             });
-            XposedBridge.log("[fucklark] 截图不上报: gc6.a.onActivityResumed 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
+            ModuleLog.log("[fucklark] 截图不上报: gc6.a.onActivityResumed 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] screenshot-noaudit install failed: " + t);
+            ModuleLog.log("[fucklark] screenshot-noaudit install failed: " + t);
         }
 
         // ⑤ 强制截图 -> 在飞书进程内剥离 FLAG_SECURE(窗口防截图)+ SurfaceView.setSecure(安全画面), 让系统允许截图。
@@ -134,20 +128,13 @@ public class RestrictedModeUnlock {
                 if (m.getReturnType() != void.class) continue;
                 Class<?>[] ps = m.getParameterTypes();
                 if (ps.length != 1 || ps[0] != eventCls) continue;   // writeData(Event)
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
-                    @Override protected void beforeHookedMethod(MethodHookParam p) {
-                        if (Config.noauditall) {
-                            p.setResult(null);   // 不入库 -> 不上传
-                            if (Config.diaglog) XposedBridge.log("[fucklark] 全审计无痕: 已拦下审计事件入库 writeData");
-                        }
-                    }
-                });
+                HookRuntime.hook(m, "restricted.writeData#" + n, VOID_GATE_NOAUDIT);
                 n++;
             }
-            XposedBridge.log("[fucklark] 全审计无痕总闸: AuditEventStorage.writeData 已 hook " + n
+            ModuleLog.log("[fucklark] 全审计无痕总闸: AuditEventStorage.writeData 已 hook " + n
                     + " 个 (进程 " + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] noaudit-all install failed: " + t);
+            ModuleLog.log("[fucklark] noaudit-all install failed: " + t);
         }
 
         // ⑦ 双重保险(第二道全量闸): 派发链 AuditService.audit*Event -> wrapper.b.g -> AuditManager.auditSecurityEvent(Event)
@@ -155,59 +142,99 @@ public class RestrictedModeUnlock {
         //    比 writeData(混淆类)更稳。hook 它 no-op = 每个审核点在入库前再被独立拦一道。跟随 Config.noauditall。
         try {
             Class<?> am = cl.loadClass("com.ss.android.lark.audit.AuditManager");
-            int n = XposedBridge.hookAllMethods(am, "auditSecurityEvent", new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
+            int n = HookRuntime.hookAllMethods(am, "auditSecurityEvent", "restricted.auditManager",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
                     if (Config.noauditall) {
-                        p.setResult(null);
-                        if (Config.diaglog) XposedBridge.log("[fucklark] 全审计无痕(双保险): 已拦下审计中枢 auditSecurityEvent");
+                        if (Config.diaglog) ModuleLog.log("[fucklark] 全审计无痕(双保险): 已拦下审计中枢 auditSecurityEvent");
+                        return null;
                     }
+                    return chain.proceed();
                 }
             }).size();
-            XposedBridge.log("[fucklark] 全审计无痕(双保险): AuditManager.auditSecurityEvent 已 hook " + n
+            ModuleLog.log("[fucklark] 全审计无痕(双保险): AuditManager.auditSecurityEvent 已 hook " + n
                     + " 个 (进程 " + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] noaudit-all(AuditManager) install failed: " + t);
+            ModuleLog.log("[fucklark] noaudit-all(AuditManager) install failed: " + t);
         }
     }
 
     static final int FLAG_SECURE = android.view.WindowManager.LayoutParams.FLAG_SECURE;  // 0x2000
 
+    // 共享门禁回调: 开关开 -> 短路返回 false(boolean 门禁) / null(void 审计上报); 关 -> 原方法继续
+    static final XposedInterface.Hooker FALSE_GATE = new XposedInterface.Hooker() {
+        @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+            if (Config.restrictunlock) return Boolean.FALSE;   // 不拦截 -> 菜单项恢复可用、不弹 toast
+            return chain.proceed();
+        }
+    };
+    static final XposedInterface.Hooker VOID_GATE_RESTRICT = new XposedInterface.Hooker() {
+        @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+            if (Config.restrictunlock) return null;   // 跳过审计上报
+            return chain.proceed();
+        }
+    };
+    static final XposedInterface.Hooker VOID_GATE_NOAUDIT = new XposedInterface.Hooker() {
+        @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+            if (Config.noauditall) {
+                if (Config.diaglog) ModuleLog.log("[fucklark] 全审计无痕: 已拦下审计事件入库 writeData");
+                return null;   // 不入库 -> 不上传
+            }
+            return chain.proceed();
+        }
+    };
+
     static void installForceScreenshot() {
         // Window.setFlags(flags, mask): 把 flags 里的 FLAG_SECURE 位清掉(mask 保留 -> 等于把该位置 0)
         try {
-            XposedHelpers.findAndHookMethod(android.view.Window.class, "setFlags", int.class, int.class, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
-                    if (Config.forcescreenshot) p.args[0] = ((Integer) p.args[0]) & ~FLAG_SECURE;
+            HookRuntime.hookMethod(android.view.Window.class, "setFlags",
+                    new Class<?>[]{int.class, int.class}, "forcescreenshot.setFlags",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    Object[] args = chain.getArgs().toArray();
+                    if (Config.forcescreenshot) args[0] = ((Integer) args[0]) & ~FLAG_SECURE;
+                    return chain.proceed(args);
                 }
             });
-        } catch (Throwable t) { XposedBridge.log("[fucklark] force-screenshot(setFlags) failed: " + t); }
+        } catch (Throwable t) { ModuleLog.log("[fucklark] force-screenshot(setFlags) failed: " + t); }
         // Window.addFlags(flags): 同上, 去掉 FLAG_SECURE
         try {
-            XposedHelpers.findAndHookMethod(android.view.Window.class, "addFlags", int.class, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
-                    if (Config.forcescreenshot) p.args[0] = ((Integer) p.args[0]) & ~FLAG_SECURE;
+            HookRuntime.hookMethod(android.view.Window.class, "addFlags",
+                    new Class<?>[]{int.class}, "forcescreenshot.addFlags",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    Object[] args = chain.getArgs().toArray();
+                    if (Config.forcescreenshot) args[0] = ((Integer) args[0]) & ~FLAG_SECURE;
+                    return chain.proceed(args);
                 }
             });
-        } catch (Throwable t) { XposedBridge.log("[fucklark] force-screenshot(addFlags) failed: " + t); }
-        // Window.setAttributes(LayoutParams): 直接改 flags 位的路径
+        } catch (Throwable t) { ModuleLog.log("[fucklark] force-screenshot(addFlags) failed: " + t); }
+        // Window.setAttributes(LayoutParams): 直接改 flags 位的路径(原地改对象内部, 不换引用, proceed 原参)
         try {
-            XposedHelpers.findAndHookMethod(android.view.Window.class, "setAttributes",
-                    android.view.WindowManager.LayoutParams.class, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
-                    if (!Config.forcescreenshot) return;
-                    android.view.WindowManager.LayoutParams lp = (android.view.WindowManager.LayoutParams) p.args[0];
+            HookRuntime.hookMethod(android.view.Window.class, "setAttributes",
+                    new Class<?>[]{android.view.WindowManager.LayoutParams.class}, "forcescreenshot.setAttributes",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    if (!Config.forcescreenshot) return chain.proceed();
+                    android.view.WindowManager.LayoutParams lp =
+                            (android.view.WindowManager.LayoutParams) chain.getArgs().get(0);
                     if (lp != null) lp.flags &= ~FLAG_SECURE;
+                    return chain.proceed();
                 }
             });
-        } catch (Throwable t) { XposedBridge.log("[fucklark] force-screenshot(setAttributes) failed: " + t); }
+        } catch (Throwable t) { ModuleLog.log("[fucklark] force-screenshot(setAttributes) failed: " + t); }
         // SurfaceView.setSecure(boolean): 安全画面(视频/部分预览)强制 false
         try {
-            XposedHelpers.findAndHookMethod(android.view.SurfaceView.class, "setSecure", boolean.class, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
-                    if (Config.forcescreenshot) p.args[0] = false;
+            HookRuntime.hookMethod(android.view.SurfaceView.class, "setSecure",
+                    new Class<?>[]{boolean.class}, "forcescreenshot.setSecure",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    Object[] args = chain.getArgs().toArray();
+                    if (Config.forcescreenshot) args[0] = Boolean.FALSE;
+                    return chain.proceed(args);
                 }
             });
-        } catch (Throwable t) { XposedBridge.log("[fucklark] force-screenshot(setSecure) failed: " + t); }
-        XposedBridge.log("[fucklark] 强制截图: Window.setFlags/addFlags/setAttributes + SurfaceView.setSecure 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
+        } catch (Throwable t) { ModuleLog.log("[fucklark] force-screenshot(setSecure) failed: " + t); }
+        ModuleLog.log("[fucklark] 强制截图: Window.setFlags/addFlags/setAttributes + SurfaceView.setSecure 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
     }
 }

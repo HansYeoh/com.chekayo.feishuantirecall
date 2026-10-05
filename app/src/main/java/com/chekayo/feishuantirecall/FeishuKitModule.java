@@ -12,8 +12,8 @@ import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam;
 import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam;
 
 /**
- * 模块唯一 Java 入口（META-INF/xposed/java_init.list 注册），替代 legacy 的 4 个
- * IXposedHookLoadPackage 入口（AntiRecall / ResignTracker / FuckLarkSettingsHook /
+ * 模块唯一 Java 入口（META-INF/xposed/java_init.list 注册），替代 legacy 的
+ * 4 个包加载入口（AntiRecall / ResignTracker / FuckLarkSettingsHook /
  * ProfileCapture）。生命周期分发约定（04 文档）：
  *
  * - onModuleLoaded：只做进程级初始化（绑定 ModuleRuntime、回写两个 MODULE_PATH），
@@ -78,7 +78,7 @@ public final class FeishuKitModule extends XposedModule {
 
         ModuleRuntime.setTargetPackage(pkg, cl);
 
-        // 完整分发（顺序沿用 legacy xposed_init；安装顺序无相互依赖，仅保持可读对照）。
+        // 完整分发（顺序沿用 legacy 入口注册表；安装顺序无相互依赖，仅保持可读对照）。
         // 各功能内部自带进程限制：AntiRecall native 层 / DownloadMirror / ResignTracker 仅主进程。
         AntiRecall.install(pkg, cl);
         ResignTracker.install(pkg, cl);

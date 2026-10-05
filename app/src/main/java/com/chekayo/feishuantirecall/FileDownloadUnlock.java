@@ -3,9 +3,7 @@ package com.chekayo.feishuantirecall;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.libxposed.api.XposedInterface;
 
 /**
  * 解除文件/图片下载限制 —— 飞书对加密聊天(外部/密聊)禁止另存(CipherManager.e()==1 -> download forbidden)。
@@ -29,17 +27,18 @@ public class FileDownloadUnlock {
             Class<?> foc = cl.loadClass("com.ss.android.lark.filedetail.impl.open.FileOpenUtils");
             Method m = uniqueStaticNoArgBoolean(foc);
             if (m != null) {
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
-                    @Override protected void beforeHookedMethod(MethodHookParam p) {
-                        if (Config.downloadunlock) p.setResult(false);
+                HookRuntime.hook(m, "dlunlock.fileopen", new XposedInterface.Hooker() {
+                    @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                        if (Config.downloadunlock) return Boolean.FALSE;
+                        return chain.proceed();
                     }
                 });
-                XposedBridge.log("[fucklark] 解除下载限制: FileOpenUtils." + m.getName() + " 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
+                ModuleLog.log("[fucklark] 解除下载限制: FileOpenUtils." + m.getName() + " 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
             } else {
-                XposedBridge.log("[fucklark] 解除下载限制: FileOpenUtils 无唯一无参 boolean 方法, 跳过(版本变动?)");
+                ModuleLog.log("[fucklark] 解除下载限制: FileOpenUtils 无唯一无参 boolean 方法, 跳过(版本变动?)");
             }
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] download unlock(FileOpenUtils) install failed: " + t);
+            ModuleLog.log("[fucklark] download unlock(FileOpenUtils) install failed: " + t);
         }
 
         // ② 图片下载判定: DownloadCheckUtil 里 (PhotoItem)->DownloadCheckResult 的静态方法 -> 强制 ALLOW
@@ -47,20 +46,21 @@ public class FileDownloadUnlock {
             Class<?> dc = cl.loadClass("com.ss.android.lark.widget.photo.preview.utils.DownloadCheckUtil");
             Class<?> res = cl.loadClass("com.ss.android.lark.widget.photo.preview.utils.DownloadCheckUtil$DownloadCheckResult");
             Class<?> photo = cl.loadClass("com.ss.android.lark.widget.photopicker.entity.PhotoItem");
-            final Object allow = XposedHelpers.getStaticObjectField(res, "ALLOW");
+            final Object allow = Reflect.getStaticObjectField(res, "ALLOW");
             Method m = staticMethodBySig(dc, res, photo);
             if (m != null) {
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
-                    @Override protected void beforeHookedMethod(MethodHookParam p) {
-                        if (Config.downloadunlock) p.setResult(allow);
+                HookRuntime.hook(m, "dlunlock.downloadcheck", new XposedInterface.Hooker() {
+                    @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                        if (Config.downloadunlock) return allow;
+                        return chain.proceed();
                     }
                 });
-                XposedBridge.log("[fucklark] 解除下载限制: DownloadCheckUtil." + m.getName() + " 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
+                ModuleLog.log("[fucklark] 解除下载限制: DownloadCheckUtil." + m.getName() + " 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
             } else {
-                XposedBridge.log("[fucklark] 解除下载限制: DownloadCheckUtil 无 (PhotoItem)->Result 方法, 跳过");
+                ModuleLog.log("[fucklark] 解除下载限制: DownloadCheckUtil 无 (PhotoItem)->Result 方法, 跳过");
             }
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] download unlock(DownloadCheckUtil) install failed: " + t);
+            ModuleLog.log("[fucklark] download unlock(DownloadCheckUtil) install failed: " + t);
         }
 
         // ③ 屏蔽下载/预览/存云盘/存图审计 -> 下载无痕(跟随 Config.downloadunlock)。
@@ -80,72 +80,86 @@ public class FileDownloadUnlock {
         // 文件: hook FileDetailModuleDependency.getAuditDependency() -> 发现实现类 -> 空转其 (String×4)->void 方法
         try {
             Class<?> dep = cl.loadClass("com.ss.android.lark.filedetail.FileDetailModuleDependency");
-            XposedBridge.hookAllMethods(dep, "getAuditDependency", new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam p) {
-                    Object impl = p.getResult();
-                    if (impl == null) return;
-                    Class<?> c = impl.getClass();
-                    if (!auditImplHooked.add(c.getName())) return;   // 每个实现类只挂一次
-                    int n = 0;
-                    for (Method m : c.getDeclaredMethods()) {
-                        if (m.isSynthetic() || m.isBridge()) continue;
-                        if (m.getReturnType() != void.class) continue;
-                        Class<?>[] ps = m.getParameterTypes();
-                        if (ps.length != 4) continue;
-                        if (ps[0] != String.class || ps[1] != String.class || ps[2] != String.class || ps[3] != String.class) continue;
-                        final String mn = m.getName();
-                        XposedBridge.hookMethod(m, new XC_MethodHook() {
-                            @Override protected void beforeHookedMethod(MethodHookParam q) {
-                                if (Config.downloadunlock) {
-                                    q.setResult(null);   // 跳过审计上报
-                                    if (Config.diaglog) XposedBridge.log("[fucklark] 已拦下文件审计上报: " + mn
-                                            + "(" + java.util.Arrays.toString(q.args) + ")");
+            HookRuntime.hookAllMethods(dep, "getAuditDependency", "dlunlock.getAuditDependency",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    // legacy after-hook: 原方法先执行, 拿返回值(实现类对象)再动态注册; 异常不影响原返回值
+                    Object impl = chain.proceed();
+                    try {
+                        if (impl == null) return impl;
+                        Class<?> c = impl.getClass();
+                        if (!auditImplHooked.add(c.getName())) return impl;   // 每个实现类只挂一次
+                        int n = 0;
+                        for (Method m : c.getDeclaredMethods()) {
+                            if (m.isSynthetic() || m.isBridge()) continue;
+                            if (m.getReturnType() != void.class) continue;
+                            Class<?>[] ps = m.getParameterTypes();
+                            if (ps.length != 4) continue;
+                            if (ps[0] != String.class || ps[1] != String.class || ps[2] != String.class || ps[3] != String.class) continue;
+                            final String mn = m.getName();
+                            final int idx = n;
+                            HookRuntime.hook(m, "dlunlock.audit." + c.getName() + "#" + idx,
+                                    new XposedInterface.Hooker() {
+                                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                                    if (Config.downloadunlock) {
+                                        if (Config.diaglog) ModuleLog.log("[fucklark] 已拦下文件审计上报: " + mn
+                                                + "(" + java.util.Arrays.toString(chain.getArgs().toArray()) + ")");
+                                        return null;   // 跳过审计上报
+                                    }
+                                    return chain.proceed();
                                 }
-                            }
-                        });
-                        n++;
-                    }
-                    XposedBridge.log("[fucklark] 屏蔽下载审计: " + c.getName() + " 空转 " + n + " 个上报方法");
+                            });
+                            n++;
+                        }
+                        ModuleLog.log("[fucklark] 屏蔽下载审计: " + c.getName() + " 空转 " + n + " 个上报方法");
+                    } catch (Throwable ignored) {}
+                    return impl;
                 }
             });
-            XposedBridge.log("[fucklark] 屏蔽下载审计: 已挂 FileDetailModuleDependency.getAuditDependency (进程 " + AntiRecall.currentProcessName() + ")");
+            ModuleLog.log("[fucklark] 屏蔽下载审计: 已挂 FileDetailModuleDependency.getAuditDependency (进程 " + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] download-audit suppress(file) install failed: " + t);
+            ModuleLog.log("[fucklark] download-audit suppress(file) install failed: " + t);
         }
         // 图片: hook PhotoPickerModuleDependencyImpl.auditImageDownload(String) -> 空转
         try {
             Class<?> ppd = cl.loadClass("com.ss.android.lark.framework.assembly.photopicker.PhotoPickerModuleDependencyImpl");
-            int n = XposedBridge.hookAllMethods(ppd, "auditImageDownload", new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
+            int n = HookRuntime.hookAllMethods(ppd, "auditImageDownload", "dlunlock.auditImageDownload",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
                     if (Config.downloadunlock) {
-                        p.setResult(null);
-                        if (Config.diaglog) XposedBridge.log("[fucklark] 已拦下图片审计上报: auditImageDownload("
-                                + java.util.Arrays.toString(p.args) + ")");
+                        if (Config.diaglog) ModuleLog.log("[fucklark] 已拦下图片审计上报: auditImageDownload("
+                                + java.util.Arrays.toString(chain.getArgs().toArray()) + ")");
+                        return null;
                     }
+                    return chain.proceed();
                 }
             }).size();
-            XposedBridge.log("[fucklark] 屏蔽下载审计: PhotoPickerModuleDependencyImpl.auditImageDownload 已 hook " + n + " 个");
+            ModuleLog.log("[fucklark] 屏蔽下载审计: PhotoPickerModuleDependencyImpl.auditImageDownload 已 hook " + n + " 个");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] download-audit suppress(image) install failed: " + t);
+            ModuleLog.log("[fucklark] download-audit suppress(image) install failed: " + t);
         }
         // 总出口(双保险): 存图/存视频的所有路径(PhotoPicker / ChatAuditDependency 等)最终都汇到审计服务
         // y33.a.a().auditImageDownload / auditMediaDownload。hook 访问器 y33.a.a() 发现服务实例, 按未混淆名空转其
         // auditImageDownload / auditMediaDownload -> 一网打尽。仅 7.70 定位(y33.a 混淆名; 方法名未混淆)。
         try {
             Class<?> y33a = cl.loadClass("y33.a");
-            XposedBridge.hookAllMethods(y33a, "a", new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam p) {
-                    Object svc = p.getResult();
-                    if (svc == null) return;
-                    Class<?> c = svc.getClass();
-                    if (!auditImplHooked.add("svc:" + c.getName())) return;   // 服务实现类只挂一次
-                    int n = hookNamedVoidMethods(c, "auditImageDownload") + hookNamedVoidMethods(c, "auditMediaDownload");
-                    XposedBridge.log("[fucklark] 屏蔽下载审计(总出口): " + c.getName() + " 空转 " + n + " 个存图/存视频上报");
+            HookRuntime.hookAllMethods(y33a, "a", "dlunlock.svcaccessor",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    Object svc = chain.proceed();
+                    try {
+                        if (svc == null) return svc;
+                        Class<?> c = svc.getClass();
+                        if (!auditImplHooked.add("svc:" + c.getName())) return svc;   // 服务实现类只挂一次
+                        int n = hookNamedVoidMethods(c, "auditImageDownload") + hookNamedVoidMethods(c, "auditMediaDownload");
+                        ModuleLog.log("[fucklark] 屏蔽下载审计(总出口): " + c.getName() + " 空转 " + n + " 个存图/存视频上报");
+                    } catch (Throwable ignored) {}
+                    return svc;
                 }
             });
-            XposedBridge.log("[fucklark] 屏蔽下载审计: 已挂审计服务访问器 y33.a.a (进程 " + AntiRecall.currentProcessName() + ")");
+            ModuleLog.log("[fucklark] 屏蔽下载审计: 已挂审计服务访问器 y33.a.a (进程 " + AntiRecall.currentProcessName() + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] download-audit suppress(sink) install failed: " + t);
+            ModuleLog.log("[fucklark] download-audit suppress(sink) install failed: " + t);
         }
     }
 
@@ -155,14 +169,15 @@ public class FileDownloadUnlock {
         for (Method m : c.getDeclaredMethods()) {
             if (m.isSynthetic() || m.isBridge()) continue;
             if (!m.getName().equals(name)) continue;
-            final String mn = m.getName();
-            XposedBridge.hookMethod(m, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
+            final int idx = n;
+            HookRuntime.hook(m, "dlunlock.svcaudit." + name + "#" + idx, new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
                     if (Config.downloadunlock) {
-                        p.setResult(null);
-                        if (Config.diaglog) XposedBridge.log("[fucklark] 已拦下存图/存视频审计上报: " + mn
-                                + "(" + java.util.Arrays.toString(p.args) + ")");
+                        if (Config.diaglog) ModuleLog.log("[fucklark] 已拦下存图/存视频审计上报: " + name
+                                + "(" + java.util.Arrays.toString(chain.getArgs().toArray()) + ")");
+                        return null;
                     }
+                    return chain.proceed();
                 }
             });
             n++;
