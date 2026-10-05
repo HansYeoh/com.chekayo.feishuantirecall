@@ -1,0 +1,11 @@
+id=com.chekayo.feishuantirecall
+name=FeishuKit
+version=1.8.9
+versionCode=31
+author=haikow
+description=FeishuKit：防撤回 / 防已读 / 离职档案。设置在飞书「设置 → 实验室」后的「模块设置」
+minApiVersion=102
+targetApiVersion=102
+staticScope=true
+exceptionMode=protective
+autoHotReload=true

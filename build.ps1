@@ -274,6 +274,18 @@ $KS = Find-OrCreate-Keystore
 if (Test-Path $build) { Remove-Item $build -Recurse -Force }
 New-Item -ItemType Directory -Force $build, "$build\stubs", "$build\app" | Out-Null
 
+# ── libxposed API 102: 从 AAR 解出 classes.jar（仅编译期，不进模块 DEX） ──
+$xapiAar = Join-Path $PROJ 'third_party\libxposed\api-102.0.0.aar'
+if (-not (Test-Path $xapiAar)) { throw "libxposed API AAR not found: $xapiAar (see third_party/libxposed/README.md)" }
+New-Item -ItemType Directory -Force "$build\libxposed" | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$aar = [System.IO.Compression.ZipFile]::OpenRead($xapiAar)
+try {
+  $cj = $aar.Entries | Where-Object { $_.FullName -eq 'classes.jar' }
+  if (-not $cj) { throw "classes.jar not found inside $xapiAar" }
+  [System.IO.Compression.ZipFileExtensions]::ExtractToFile($cj, "$build\libxposed\classes.jar", $true)
+} finally { $aar.Dispose() }
+
 if ($clangpp) {
   Write-Host "`n== 0. NDK compile libantirecall.so (arm64-v8a) =="
   $njni = "$PROJ\native\jni"
@@ -311,26 +323,30 @@ if ($clangpp) {
 "libantirecall.so = $([math]::Round((Get-Item "$build\libantirecall.so").Length/1KB,1))KB"
 
 Write-Host "`n== 1. javac stubs =="
+# stubs/java/lang/invoke/LambdaMetafactory.java 是 -source 8 的 lambda 编译桩，与 Xposed 无关；
+# 将来清理 legacy stubs(de/robv) 时必须保留它。
 $stubFiles = Get-ChildItem "$PROJ\stubs" -Recurse -Filter *.java | ForEach-Object { $_.FullName }
 & $javac --release 8 -d "$build\stubs" $stubFiles
 if ($LASTEXITCODE) { throw "javac stubs failed" }
 
 Write-Host "`n== 2. javac module =="
 $srcFiles = Get-ChildItem "$PROJ\app\src\main\java" -Recurse -Filter *.java | ForEach-Object { $_.FullName }
-& $javac -g -encoding UTF-8 -source 8 -target 8 -bootclasspath "$AndroidJar" -cp "$build\stubs" -d "$build\app" $srcFiles
+& $javac -g -encoding UTF-8 -source 8 -target 8 -bootclasspath "$AndroidJar" -cp "$build\stubs;$build\libxposed\classes.jar" -d "$build\app" $srcFiles
 if ($LASTEXITCODE) { throw "javac module failed" }
 
-Write-Host "`n== 3. d8 -> classes.dex (no desugar) =="
+Write-Host "`n== 3. d8 -> classes.dex =="
 # Windows 命令行长度限制(~32K): 类文件多时逐个传参会超限。d8 支持 @argfile, 每行一个路径。
 # 另: build-tools 34 的 d8 8.2 解析 JDK22 javac 产物的部分匿名类会 NPE,
 #     若存在 build/tools/r8.jar(新版 R8, 含修复)则优先用它跑 D8。
+# min-api 29: Java 8 lambda/invokedynamic 原生支持，无需 --no-desugaring。
+# d8 输入只含 $build\app 的类；libxposed classes.jar 仅编译期依赖，不得进入 DEX。
 $classFiles = Get-ChildItem "$build\app" -Recurse -Filter *.class | ForEach-Object { $_.FullName }
 $classFiles | Set-Content -Encoding ascii "$build\d8_args.txt"
 $r8Jar = Join-Path $PROJ 'tools\r8.jar'
 if (Test-Path $r8Jar) {
-  & $java -cp $r8Jar com.android.tools.r8.D8 --min-api 22 --no-desugaring --output "$build" "@$build\d8_args.txt"
+  & $java -cp $r8Jar com.android.tools.r8.D8 --min-api 29 --output "$build" "@$build\d8_args.txt"
 } else {
-  & $d8 --min-api 22 --no-desugaring --output "$build" "@$build\d8_args.txt"
+  & $d8 --min-api 29 --output "$build" "@$build\d8_args.txt"
 }
 if ($LASTEXITCODE) { throw "d8 failed" }
 
@@ -340,11 +356,11 @@ if ($LASTEXITCODE) { throw "aapt2 compile failed" }
 & $aapt2 link -o "$build\app-unsigned.apk" -I "$AndroidJar" `
     --manifest "$PROJ\app\src\main\AndroidManifest.xml" `
     -A "$PROJ\app\src\main\assets" `
-    --min-sdk-version 22 --target-sdk-version 34 `
+    --min-sdk-version 29 --target-sdk-version 34 `
     "$build\res.zip"
 if ($LASTEXITCODE) { throw "aapt2 link failed" }
 
-Write-Host "`n== 5. 塞入 classes.dex + lib/arm64-v8a/libantirecall.so =="
+Write-Host "`n== 5. 塞入 classes.dex + lib/arm64-v8a/*.so + META-INF/xposed =="
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::Open("$build\app-unsigned.apk", 'Update')
 try {
@@ -355,6 +371,14 @@ try {
   if (Test-Path "$build\libresign.so") {
     $oldso2 = $zip.GetEntry('lib/arm64-v8a/libresign.so'); if ($oldso2) { $oldso2.Delete() }
     [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, "$build\libresign.so", 'lib/arm64-v8a/libresign.so') | Out-Null
+  }
+  # modern Xposed 元数据：追加到 APK 根目录 META-INF/xposed/（框架按此发现入口，不在 assets/）
+  $resRoot = Join-Path $PROJ 'app\src\main\resources'
+  foreach ($m in @('META-INF/xposed/java_init.list', 'META-INF/xposed/module.prop', 'META-INF/xposed/scope.list')) {
+    $msrc = Join-Path $resRoot ($m -replace '/', '\')
+    if (-not (Test-Path $msrc)) { throw "modern metadata missing: $msrc" }
+    $oldm = $zip.GetEntry($m); if ($oldm) { $oldm.Delete() }
+    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $msrc, $m) | Out-Null
   }
 } finally { $zip.Dispose() }
 
