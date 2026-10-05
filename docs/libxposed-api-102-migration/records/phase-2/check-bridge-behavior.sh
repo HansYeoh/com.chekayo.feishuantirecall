@@ -28,8 +28,9 @@ JAVA_BIN="$(command -v java || true)"; [ -z "$JAVA_BIN" ] && [ -n "${JAVA_HOME:-
 [ -n "$JAVAC" ] && [ -n "$JAVA_BIN" ] || fail "jdk not found (set JAVA_HOME)"
 
 # android.jar（编译期签名引用 + 运行期兜底；测试路径不触达其 stub 方法体）
+# 注意 set -u：所有可选环境变量必须带 :- 缺省，LOCALAPPDATA 未导出时不得中断（复审 P2 修补项）
 ANDROID_JAR=""
-for sdk in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$LOCALAPPDATA/Android/Sdk" "$HOME/AppData/Local/Android/Sdk"; do
+for sdk in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "${LOCALAPPDATA:-}/Android/Sdk" "${HOME:-}/AppData/Local/Android/Sdk"; do
   [ -n "$sdk" ] && [ -d "$sdk/platforms" ] || continue
   for p in $(ls -1 "$sdk/platforms" | sort -V | tail -3); do
     [ -f "$sdk/platforms/$p/android.jar" ] && ANDROID_JAR="$sdk/platforms/$p/android.jar"
