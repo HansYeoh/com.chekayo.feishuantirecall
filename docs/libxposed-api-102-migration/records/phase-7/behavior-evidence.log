@@ -1,0 +1,37 @@
+# §3 行为矩阵用户测试轮次证据（2026-10-06 02:00-02:30, 用户本人操作工作号+测试小号, 期间 adb logcat 持续抓取）
+# 已脱敏: 姓名/邮箱/部门/上级/uid/频道id/文件名/安装路径
+# 本窗口内的 HookRuntime: installed 均为 after 回调内动态安装（静态安装发生在 01:08 进程启动时, 不在本窗口）
+10-06 02:02:41.159 I/antiread-j(25009): READ_REQ #38 ch=<chid> ids:1->0 maxPos=75 sendWin=false 清空(浏览,暂存)
+10-06 02:02:44.180 I/antiread-j(25009): READ_REQ #39 ch=<chid> ids:1->0 maxPos=75 sendWin=false 清空(浏览,暂存)
+10-06 02:02:49.737 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-6c,0,1] [fucklark] config bridge bound pkg=com.ss.android.lark
+10-06 02:02:50.769 I/antiread-j(25009): READ_REQ #40 ch=<chid> ids:1->0 maxPos=75 sendWin=false 清空(浏览,暂存)
+10-06 02:02:58.503 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-6d,0,1] [fucklark] 高级设置卡片已注入 parent=LinearLayout index=4/7
+10-06 02:03:30.581 I/antiread-j(25009): READ_REQ #41 ch=<chid> ids:2->0 maxPos=76 sendWin=false 清空(浏览,暂存)
+10-06 02:03:35.705 I/antiread-j(25009): READ_REQ #42 ch=<chid> ids:1->0 maxPos=77 sendWin=false 清空(浏览,暂存)
+10-06 02:03:51.226 I/antiread-j(25009): READ_REQ #43 ch=<chid> ids:1->0 maxPos=78 sendWin=false 清空(浏览,暂存)
+10-06 02:04:34.978 I/antiread-j(25009): READ_REQ #44 ch=<chid> ids:1->0 maxPos=79 sendWin=false 清空(浏览,暂存)
+10-06 02:04:41.075 I/antiread-j(25009): READ_REQ #45 ch=<chid> ids:5->0 maxPos=79 sendWin=false 清空(浏览,暂存)
+10-06 02:04:41.362 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-6a7-6e,0,1] LarkResign: 离职快照=65 累计=65 uid=<uid-hash> -> /data/user/0/com.ss.android.lark/files/accounts/<uid-hash>/resign_tracker/resigned_all.json
+10-06 02:05:31.829 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-6f,0,1] [fucklark] 高级设置卡片已注入 parent=LinearLayout index=4/7
+10-06 02:07:30.834 I/antiread-j(25009): READ_REQ #46 ch=<chid> ids:1->0 maxPos=80 sendWin=false 清空(浏览,暂存)
+10-06 02:07:36.711 I/antiread-j(25009): READ_REQ #47 ch=<chid> ids:1->0 maxPos=81 sendWin=false 清空(浏览,暂存)
+10-06 02:07:39.927 I/antiread-j(25009): READ_REQ #48 ch=<chid> ids:1->0 maxPos=81 sendWin=false 清空(浏览,暂存)
+10-06 02:08:33.573 I/antiread-j(25009): READ_REQ #49 ch=<chid> ids:1->0 maxPos=8 sendWin=false 清空(浏览,暂存)
+10-06 02:08:47.169 I/antiread-j(25009): READ_REQ #50 ch=<chid> ids:2->0 maxPos=83 sendWin=false 清空(浏览,暂存)
+10-06 02:08:51.071 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-70,0,1] HookRuntime: installed dlunlock.audit.com.ss.android.lark.filedetail.FileDetailModuleDependency$e#0 -> com.ss.android.lark.filedetail.FileDetailModuleDependency$e#c(java.lang.String,java.lang.String,java.lang.String,java.lang.String)
+10-06 02:08:51.072 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-71,0,1] HookRuntime: installed dlunlock.audit.com.ss.android.lark.filedetail.FileDetailModuleDependency$e#1 -> com.ss.android.lark.filedetail.FileDetailModuleDependency$e#d(java.lang.String,java.lang.String,java.lang.String,java.lang.String)
+10-06 02:08:51.073 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-72,0,1] HookRuntime: installed dlunlock.audit.com.ss.android.lark.filedetail.FileDetailModuleDependency$e#2 -> com.ss.android.lark.filedetail.FileDetailModuleDependency$e#e(java.lang.String,java.lang.String,java.lang.String,java.lang.String)
+10-06 02:08:51.073 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-73,0,1] [fucklark] 屏蔽下载审计: com.ss.android.lark.filedetail.FileDetailModuleDependency$e 空转 3 个上报方法
+10-06 02:08:54.235 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-d4f-74,0,1] [fucklark][dl] 已另存到系统下载: <filename>
+10-06 02:10:42.486 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-75,0,1] [fucklark] 高级设置卡片已注入 parent=LinearLayout index=4/7
+10-06 02:11:02.056 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-6a7-76,0,1] LarkResign: 离职快照=65 累计=65 uid=<uid-hash> -> /data/user/0/com.ss.android.lark/files/accounts/<uid-hash>/resign_tracker/resigned_all.json
+10-06 02:11:08.375 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-77,0,1] [fucklark] 高级设置卡片已注入 parent=LinearLayout index=4/7
+10-06 02:22:02.588 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-6a7-78,0,1] LarkResign: 离职快照=65 累计=65 uid=<uid-hash> -> /data/user/0/com.ss.android.lark/files/accounts/<uid-hash>/resign_tracker/resigned_all.json
+10-06 02:22:07.098 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-79,0,1] [fucklark] 归档资料 <PII已抹除> 累计=1
+10-06 02:22:08.595 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-7a,0,1] [fucklark] 归档资料 <PII已抹除> 累计=1
+10-06 02:22:10.597 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-7b,0,1] [fucklark] 归档资料 <PII已抹除> 累计=1
+10-06 02:22:13.596 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-7c,0,1] [fucklark] 归档资料 <PII已抹除> 累计=1
+10-06 02:22:27.035 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-7d,0,1] [fucklark] 归档资料 <PII已抹除> 累计=2
+10-06 02:22:28.530 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-7e,0,1] [fucklark] 归档资料 <PII已抹除> 累计=2
+10-06 02:22:30.533 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-7f,0,1] [fucklark] 归档资料 <PII已抹除> 累计=2
+10-06 02:22:33.533 I/LSPosedFramework(25009): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,61b1-1a10d0a4201-2-80,0,1] [fucklark] 归档资料 <PII已抹除> 累计=2
