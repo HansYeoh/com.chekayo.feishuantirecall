@@ -1073,7 +1073,11 @@ final class DataViews {
     static String moduleApkPath() {
         try {
             Class<?> c = Class.forName("com.chekayo.feishuantirecall.AntiRecall");
-            Object v = c.getField("MODULE_PATH").get(null);
+            // MODULE_PATH 是 package-private：getField 只查 public，必然 NoSuchFieldException
+            // （阶段3审计备注的既有问题）。与下方 moduleVersion 的 getDeclaredField 口径对齐。
+            java.lang.reflect.Field f = c.getDeclaredField("MODULE_PATH");
+            f.setAccessible(true);
+            Object v = f.get(null);
             return v == null ? null : String.valueOf(v);
         } catch (Throwable t) { return null; }
     }
