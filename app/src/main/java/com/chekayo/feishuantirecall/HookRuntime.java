@@ -33,6 +33,7 @@ public final class HookRuntime {
 
     /** 一条已安装 hook 的统一登记记录。 */
     public static final class InstalledHook {
+        private final String registryKey;
         private final String logicalId;
         private final String processName;
         private final String packageName;
@@ -42,7 +43,8 @@ public final class HookRuntime {
         private final long installedAtMillis;
         private volatile XposedInterface.HookHandle apiHandle;
 
-        InstalledHook(String logicalId, Executable executable, XposedInterface.HookHandle apiHandle) {
+        InstalledHook(String registryKey, String logicalId, Executable executable, XposedInterface.HookHandle apiHandle) {
+            this.registryKey = registryKey;
             this.logicalId = logicalId;
             this.processName = ModuleRuntime.getProcessName();
             this.packageName = ModuleRuntime.getPackageName();
@@ -53,6 +55,8 @@ public final class HookRuntime {
             this.apiHandle = apiHandle;
         }
 
+        /** 安装时算好的幂等键；unhook 按它移除，不受之后 setTargetPackage 切换影响。 */
+        public String getRegistryKey() { return registryKey; }
         public String getLogicalId() { return logicalId; }
         public String getProcessName() { return processName; }
         public String getPackageName() { return packageName; }
@@ -67,7 +71,7 @@ public final class HookRuntime {
             XposedInterface.HookHandle h = apiHandle;
             if (h == null) return;
             apiHandle = null;
-            REGISTRY.remove(dedupeKey(logicalId), this);
+            REGISTRY.remove(registryKey, this);
             try {
                 h.unhook();
             } catch (Throwable t) {
@@ -120,7 +124,7 @@ public final class HookRuntime {
             XposedInterface.HookHandle api = module.hook(target)
                     .setId(key)
                     .intercept(hooker);
-            InstalledHook rec = new InstalledHook(logicalId, target, api);
+            InstalledHook rec = new InstalledHook(key, logicalId, target, api);
             REGISTRY.put(key, rec);
             ModuleLog.log("HookRuntime: installed " + logicalId + " -> " + rec.getSignature());
             return rec;
@@ -155,7 +159,8 @@ public final class HookRuntime {
     }
 
     /**
-     * 等价 XposedBridge.hookAllMethods：只 hook 本类 declared methods（不含继承，语义与 legacy 一致）。
+     * 等价 XposedBridge.hookAllMethods：形参通配地 hook 本类<b>全部</b>同名 declared methods
+     * （零参/带参都覆盖，不含继承，语义与 legacy 一致）。
      * 每个方法的 logicalId 为 prefix#0、prefix#1…；无匹配时返回空表（与 legacy 一致，不抛异常）。
      */
     public static List<InstalledHook> hookAllMethods(Class<?> clazz, String methodName,
@@ -170,7 +175,7 @@ public final class HookRuntime {
         return out;
     }
 
-    /** 等价 XposedBridge.hookAllConstructors：hook 全部 declared constructors，id 规则同上。 */
+    /** 等价 XposedBridge.hookAllConstructors：形参通配地 hook 全部 declared constructors（含带参），id 规则同上。 */
     public static List<InstalledHook> hookAllConstructors(Class<?> clazz,
                                                           String logicalIdPrefix, XposedInterface.Hooker hooker) {
         List<Constructor<?>> found = Reflect.findDeclaredConstructors(clazz);

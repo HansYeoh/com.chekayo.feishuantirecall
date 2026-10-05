@@ -79,6 +79,9 @@
 
 ## 验证结果（Windows 本机）
 
+> 以下为首轮（commit `22fe6a4`）结果。审计修复后日志文件已被重跑输出覆盖（APK 1497KB →
+> 1501KB），最终数值以文末「审计修复」章节为准。
+
 ### 1. 桥接层独立编译（阶段出口硬性项）—— PASS
 
 - 脚本：[check-bridge-standalone.sh](check-bridge-standalone.sh)，日志：
@@ -126,3 +129,68 @@
    反射 → `Reflect` 的切换全部在阶段 4 按逐文件顺序执行（05 文档）。
 3. `ModuleLog` 未绑定时的 no-op 语义依赖「模块自身进程不装 hook」现状；若未来模块自身进程
    需要日志，需另行走 logcat 的通道（03 文档允许安全降级，暂按现状实现）。
+
+## 审计修复（2026-10-05，首轮审计 暂不通过 → 修复待复审）
+
+首轮定点审计（针对 commit `22fe6a4`）判定提交范围与工作区状态无问题，但提出 1 项 P1
+功能性缺陷 + 2 项非阻塞问题。以下全部修复并补行为验证。
+
+### P1：hookAllMethods / hookAllConstructors 实际只匹配无参成员 —— 已修复
+
+- **根因**：`HookRuntime` 以省略 varargs 的形式调用
+  `Reflect.findDeclaredMethods(clazz, methodName)` / `findDeclaredConstructors(clazz)`，
+  Java 此时传入的是**空数组**而非 `null`；而 `Reflect` 只把 `parameterTypes == null` 视为
+  通配，`paramsExact(declared, [])` 仅在零参时成立 → 通配失效，只返回零参成员。按此实现，
+  阶段 4 迁移带参目标（`onActivityResult`、带参构造函数、审计方法等）会静默漏 hook。
+- **修复**（双保险，避免再次踩坑）：
+  1. `Reflect` 新增**非 varargs 的显式通配重载** `findDeclaredMethods(Class, String)` 与
+     `findDeclaredConstructors(Class)`（内部传 `(Class<?>[]) null`），作为 hookAll* 的规范入口；
+     varargs 版 javadoc 明确标注「传 null 通配；空数组=仅零参；不要用省略 varargs 表达通配」。
+  2. `HookRuntime.hookAllMethods/hookAllConstructors` 改调显式通配重载（调用点文本不变，
+     重载决议自动切换到非 varargs 版）。
+- **回归断言**（见下「行为验证」）：空数组与 null 两种调用形式的命中数都被固定下来，
+  该 bug 若回潮会被测试直接捕获。
+
+### 非阻塞①：unhook() 用当前上下文重算 registry key —— 已修复
+
+- **根因**：`InstalledHook` 已保存安装时的进程/包名/ClassLoader，但 `unhook()` 仍调
+  `dedupeKey(logicalId)` 按**当前** `ModuleRuntime` 上下文重算 key；目标包或 ClassLoader 已切换时
+  `REGISTRY.remove` 落在错误的 key 上，框架侧 hook 卸载了、登记表记录残留，后续同 logicalId
+  安装会被误判为重复。
+- **修复**：`hook()` 把安装时算好的 key 存入 `InstalledHook.registryKey`（新增
+  `getRegistryKey()`），`unhook()` 按该 key 移除，不受之后 `setTargetPackage` 影响。
+
+### 非阻塞②：callStaticMethod 未筛选静态方法 —— 已修复
+
+- `invokeBestMatch` 增加 `staticOnly` 形参：`callStaticMethod` 只在 static 方法中选择，
+  同名形参兼容的实例重载同时存在时不会误选后以 `invoke(null, …)` 触发 NPE；
+  `callMethod`（实例路径）保持 legacy 的宽松语义（实例/静态均可）。
+- 现役 6 处 `callStaticMethod` 目标均为静态方法，行为无回归。
+
+### 行为验证（新增，审计要求的最小行为测试）—— 20/20 PASS
+
+- 测试：[workbench/HookBridgeBehaviorTest.java](workbench/HookBridgeBehaviorTest.java)
+  （宿主 JVM 直跑，伪造 `XposedInterface`/`XposedModule`，产物不进 APK、不依赖真机）；
+  运行脚本：[check-bridge-behavior.sh](check-bridge-behavior.sh)，日志：
+  [behavior-test.log](behavior-test.log)。
+- 覆盖面：
+  - hookAll* 通配：零参/单参/多参方法、无参/带参构造函数全部覆盖；`hookAllMethods` 按名字
+    全遍历总和(6) == `getDeclaredMethods().length`；`hookAllConstructors` 数量(3) ==
+    `getDeclaredConstructors().length`；fake 框架侧实际安装次数与返回条数一致；
+  - 空数组=仅零参 vs null=通配 的语义区分（P1 回归断言，方法与构造函数各 2 条）；
+  - 重复 `hookAll*` 幂等（同 id 同维度 0 新安装）；
+  - registry key 固化：切包后 unhook → 切回原包无残留记录、同 logicalId 可重新安装；
+  - `callStaticMethod` 静态筛选（static dup(Object) vs instance dup(int) 同参兼容场景）与
+    `callMethod` 实例路径。
+
+### 修复后复验（全链路）
+
+- 独立编译门（[standalone-compile.log](standalone-compile.log)）：重跑 PASS，7 类编译、
+  字节码 `de/robv` = 0。
+- 完整构建（[build.log.txt](build.log.txt)）：8 阶段 PASS，APK 1501KB（+4KB 为通配重载与
+  登记字段增量），证书 `7c20f829…` 与基线一致。
+- DEX legacy 引用计数复查：`de/robv`=9 / `XposedBridge`=1 / `XposedHelpers`=1 /
+  `XC_MethodHook`=3，与迁移前基线及首轮构建完全一致（业务侧仍零变化）；
+  `io/github/libxposed`=5 不变。
+- 变更范围：仅 `Reflect.java`、`HookRuntime.java` 两个桥接类 + 本记录与测试工件；
+  native、版本号、业务文件零改动。

@@ -38,4 +38,4 @@ libantirecall.so = 52.2KB
 V3.0 Signer: certificate DN: CN=Debug, O=Debug, C=US
 V3.0 Signer: certificate SHA-256 digest: 7c20f829bb61d2758f203130b6e3f5ef0d00141def1bd383c11efeeee23ac81d
 V3.0 Signer: certificate SHA-1 digest: 04a46b6df7caabbd5379e577ea1734eade975726
-APK = D:\Desktop\Github\com.chekayo.feishuantirecall\feishu-antirecall.apk  size=1497KB
+APK = D:\Desktop\Github\com.chekayo.feishuantirecall\feishu-antirecall.apk  size=1501KB

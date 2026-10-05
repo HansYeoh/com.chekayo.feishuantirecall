@@ -4,6 +4,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -115,8 +116,18 @@ public final class Reflect {
     // ── 按签名枚举 declared 成员（不沿父类，供 hookAll* 保持 legacy 语义） ──
 
     /**
-     * 枚举本类 declared methods。methodName 传 null 通配名字；parameterTypes 传 null 通配签名，
-     * 否则按 {@link #paramsExact} 精确匹配。与 legacy hookAllMethods 一致：不含继承成员。
+     * 枚举本类 declared methods，形参通配（hookAllMethods 的规范入口，数量 == 名字匹配的
+     * getDeclaredMethods）。等价 {@code findDeclaredMethods(clazz, methodName, (Class<?>[]) null)}。
+     * <b>不要</b>用省略 varargs 的三参形式表达通配：省略可变参数传入的是空数组，语义是"仅零参"。
+     */
+    public static List<Method> findDeclaredMethods(Class<?> clazz, String methodName) {
+        return findDeclaredMethods(clazz, methodName, (Class<?>[]) null);
+    }
+
+    /**
+     * 枚举本类 declared methods。methodName 传 null 通配名字；parameterTypes 传 null 通配签名
+     * （传空数组则是"仅零参"），否则按 {@link #paramsExact} 精确匹配。
+     * 与 legacy hookAllMethods 一致：不含继承成员。
      */
     public static List<Method> findDeclaredMethods(Class<?> clazz, String methodName, Class<?>... parameterTypes) {
         List<Method> out = new ArrayList<Method>();
@@ -128,7 +139,12 @@ public final class Reflect {
         return out;
     }
 
-    /** 枚举本类 declared constructors。parameterTypes 传 null 通配，否则精确匹配。 */
+    /** 枚举本类全部 declared constructors，形参通配（hookAllConstructors 的规范入口）。 */
+    public static List<Constructor<?>> findDeclaredConstructors(Class<?> clazz) {
+        return findDeclaredConstructors(clazz, (Class<?>[]) null);
+    }
+
+    /** 枚举本类 declared constructors。parameterTypes 传 null 通配（空数组=仅无参），否则精确匹配。 */
     public static List<Constructor<?>> findDeclaredConstructors(Class<?> clazz, Class<?>... parameterTypes) {
         List<Constructor<?>> out = new ArrayList<Constructor<?>>();
         for (Constructor<?> c : clazz.getDeclaredConstructors()) {
@@ -145,15 +161,20 @@ public final class Reflect {
         if (receiver == null) {
             throw new NullPointerException("Reflect.callMethod: receiver null, method=" + methodName);
         }
-        return invokeBestMatch(receiver.getClass(), methodName, receiver, args);
+        return invokeBestMatch(receiver.getClass(), methodName, receiver, args, false);
     }
 
-    /** 等价 legacy XposedHelpers.callStaticMethod。 */
+    /**
+     * 等价 legacy XposedHelpers.callStaticMethod。
+     * 候选只在 static 方法中选择：同名形参兼容的实例重载同时存在时不至于选中后以
+     * {@code invoke(null, …)} 触发 NPE。
+     */
     public static Object callStaticMethod(Class<?> clazz, String methodName, Object... args) {
-        return invokeBestMatch(clazz, methodName, null, args);
+        return invokeBestMatch(clazz, methodName, null, args, true);
     }
 
-    private static Object invokeBestMatch(Class<?> start, String methodName, Object receiver, Object[] args) {
+    private static Object invokeBestMatch(Class<?> start, String methodName, Object receiver,
+                                          Object[] args, boolean staticOnly) {
         Method best = null;
         int bestScore = Integer.MAX_VALUE;
         Class<?>[] argTypes = new Class<?>[args.length];
@@ -161,6 +182,7 @@ public final class Reflect {
         for (Class<?> c = start; c != null; c = c.getSuperclass()) {
             for (Method m : c.getDeclaredMethods()) {
                 if (!m.getName().equals(methodName)) continue;
+                if (staticOnly && !Modifier.isStatic(m.getModifiers())) continue;
                 int score = matchScore(m.getParameterTypes(), args, argTypes);
                 if (score >= 0 && score < bestScore) { best = m; bestScore = score; }
             }
