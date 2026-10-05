@@ -1,0 +1,10 @@
+# §5 hot reload 门控真机触发（01:07:29 adb install -r 同版本重装，框架 01:07:32 发起协商）
+10-06 01:07:32.455 I/LSPosedFramework(19213): (com.ss.android.lark)[com.chekayo.feishuantirecall,FeishuKit,4b0d-1a10d067b29-5d0-56,0,1] hot reload rejected: runtime is not teardown-safe -> native=[antirecall.native-inline,resigntracker.native-inline] threads=[resigntracker.archive-push-thread,resigntracker.tracker-thread,antirecall.installer-thread,resigntracker.boot-thread] callbacks=[config-bridge.receiver(sync,pull),download-mirror.file-observer]
+10-06 01:07:32.455 I/LSPosedFramework(19213): (com.ss.android.lark)[framework,LSPosedContext,4b0d-1a10d067b29-5d0-57,0,1] Class com.chekayo.feishuantirecall.FeishuKitModule refused to be hot reloaded, skipping
+10-06 01:07:32.463 I/LSPosedFramework(25111): (com.ss.android.lark:wschannel)[com.chekayo.feishuantirecall,FeishuKit,6217-1a10d0695cd-642-4c,0,1] hot reload rejected: runtime is not teardown-safe -> callbacks=[config-bridge.receiver(sync,pull)]
+10-06 01:07:32.464 I/LSPosedFramework(25111): (com.ss.android.lark:wschannel)[framework,LSPosedContext,6217-1a10d0695cd-642-4d,0,1] Class com.chekayo.feishuantirecall.FeishuKitModule refused to be hot reloaded, skipping
+10-06 01:07:32.478 W/LSPosedService( 3494): Auto hot reload failed for com.chekayo.feishuantirecall in com.ss.android.lark/19213: status=1, message=null
+10-06 01:07:32.488 W/LSPosedService( 3494): Auto hot reload failed for com.chekayo.feishuantirecall in com.ss.android.lark:wschannel/25111: status=1, message=null
+
+# 拒绝后旧代进程继续存活（01:07:40 pidof 实测 main=19213 ws=25111 与重装前一致），随后被框架/系统按常规路径重启换新代：
+# 01:08:58 新代 61b1-1a10d0a4201 主进程干净加载：dispatch 1 次、HookRuntime installed 39 条、config bridge bound 1 条、零 skip duplicate、零 FATAL

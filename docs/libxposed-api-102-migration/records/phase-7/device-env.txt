@@ -1,0 +1,7 @@
+# 环境信息
+device: Xiaomi 15 Pro (2410DPN6CC), HyperOS, Android 17 / SDK 37
+framework: LSPosed v2.2.1 (7912) zygisk_lsposed, KernelSU
+target: com.ss.android.lark 飞书 8.1.12 (8011250)
+com.larksuite.suite: 未安装（国际版未测试，08 文档允许）
+module: com.chekayo.feishuantirecall v1.8.9/31, APK 1501KB, 证书 7c20f829…（阶段6产物原包）
+scope: LSPosed 已启用(enabled=1 user 0), scope=[com.ss.android.lark]
