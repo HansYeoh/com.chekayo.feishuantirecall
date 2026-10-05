@@ -91,6 +91,18 @@ build.sh / build.ps1    一键构建（Linux / Windows）
 
 赞助纯属无偿鼓励，与功能无关 —— 本项目所有功能开源免费，**不含任何赞助专属内容**。
 
+## 贡献者 / Contributors
+
+感谢每一位让 FeishuKit 变得更好的贡献者（按首次贡献时间排序）：
+
+| 贡献者 | 贡献 |
+|---|---|
+| [@SonderZhong](https://github.com/SonderZhong) | 数据备份导入导出、全员档案分类、账号数据隔离、撤回提示自定义（#2 #3） |
+| [@naiheSH](https://github.com/naiheSH) | 修复屏蔽消息速览误拦搜索页导致的闪退（#5） |
+| [@HansYeoh](https://github.com/HansYeoh) | 飞书 8.x 适配：messages 列序运行时自适应 + 双 provider hook（#6） |
+
+> 欢迎提 PR 参与适配与修复， CONTRIBUTING.md 有方法论；所有被合入的贡献都会在这里署名。
+
 ## License
 
 [GPL-3.0](LICENSE)（copyleft，防闭源套壳）。
