@@ -1,4 +1,4 @@
-=== phase-4 hook behavior (24 断言) ===
+=== phase-4 hook behavior (24 assertions) ===
 == 阶段4 hook 迁移行为验证（宿主 JVM） ==
 android.jar = C:/Users/Weirdo/AppData/Local/Android/Sdk/platforms/android-37.0/android.jar
 javac OK（无 stubs）
@@ -28,7 +28,7 @@ javac OK（无 stubs）
 [PASS] ͬ logicalId ���ΰ�װ�ݵȣ�0 �¿�ܰ�װ��
 == PASS��ȫ�� hook Ǩ����Ϊ����ͨ�� ==
 
-=== phase-4 standalone 门回归 ===
+=== phase-4 standalone gate regression ===
 == 阶段4 hook 迁移独立编译门 ==
 android.jar = C:/Users/Weirdo/AppData/Local/Android/Sdk/platforms/android-37.0/android.jar
 A. 全量编译 OK（classpath 仅 android.jar + libxposed classes.jar，无 stubs）

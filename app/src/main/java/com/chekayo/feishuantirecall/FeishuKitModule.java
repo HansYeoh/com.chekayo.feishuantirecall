@@ -103,10 +103,11 @@ public final class FeishuKitModule extends XposedModule {
         // 06 文档 §2 第一版策略：任一 teardown-unsafe 资源存在即拒绝（运行在旧代代码里）。
         // native inline hook / 安装与轮询线程 / 配置桥接收器都没有 unhook+dlclose /
         // 停线程 / unregister 的生命周期，放行 = 旧 hook 与新 hook 叠加、旧线程持有旧代引用。
-        if (HotReloadSafety.hasNativeHooks()
-                || HotReloadSafety.hasModuleThreads()
-                || HotReloadSafety.hasExternalCallbacks()) {
-            ModuleLog.log("hot reload rejected: runtime is not teardown-safe -> " + HotReloadSafety.describe());
+        // 判定走单次锁内快照（阶段 5 审计 P1 修复）：三类资源与原因文本在同一次加锁内生成，
+        // 登记线程无法插在「查完一类到返回」之间；快照不可变，决策与理由来自同一瞬间。
+        HotReloadSafety.GateSnapshot safety = HotReloadSafety.inspectReloadSafety();
+        if (!safety.isClean()) {
+            ModuleLog.log("hot reload rejected: runtime is not teardown-safe -> " + safety.describe());
             return false;
         }
         try {

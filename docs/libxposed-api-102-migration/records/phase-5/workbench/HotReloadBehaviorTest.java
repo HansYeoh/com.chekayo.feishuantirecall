@@ -11,6 +11,7 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 
 /**
  * 阶段 5 行为验证：hot reload 安全门控 + 新一代入口接线（宿主 JVM 直跑，06 文档）。
@@ -260,6 +261,87 @@ public class HotReloadBehaviorTest {
         m3.onModuleLoaded(new FakeModuleLoadedParam());
         check(ModuleRuntime.module() == m2, "同 loader 跨代 bind 仍被拒（防旧代复活）");
         check(logCount("refuse cross-generation re-bind") == refuseBefore + 1, "跨代拒绝已记日志");
+
+        // ── 13. GateSnapshot 点时快照性质（审计 P1 修复的结构性质） ──
+        HotReloadSafety.resetForTest();
+        HotReloadSafety.GateSnapshot snapClean = HotReloadSafety.inspectReloadSafety();
+        check(snapClean.isClean() && "(clean)".equals(snapClean.describe())
+                && !snapClean.hasNativeHooks() && !snapClean.hasModuleThreads() && !snapClean.hasExternalCallbacks(),
+                "干净快照：isClean 与三类布尔、describe 三者一致");
+        HotReloadSafety.markNativeHook("p1.native");
+        check(snapClean.isClean() && "(clean)".equals(snapClean.describe()),
+                "快照不可变：登记不影响已发出的快照（点时语义）");
+        HotReloadSafety.GateSnapshot snapMarked = HotReloadSafety.inspectReloadSafety();
+        check(!snapMarked.isClean() && snapMarked.hasNativeHooks()
+                && !snapMarked.hasModuleThreads() && !snapMarked.hasExternalCallbacks()
+                && snapMarked.describe().contains("p1.native"),
+                "登记后新快照如实反映类别与资源名");
+        check(snapMarked.isClean() == !(snapMarked.hasNativeHooks()
+                || snapMarked.hasModuleThreads() || snapMarked.hasExternalCallbacks()),
+                "isClean 恒等于三类布尔之或的非");
+
+        // ── 14. 并发回归：完整门控判定期间的登记不错误放行（审计 P1） ──
+        // 两个写线程在门控判定全程反复 begin/end 延时任务（唯一可能的瞬态资源），
+        // 主线程高频取快照：每次快照必须自洽（isClean ⇔ 三类布尔 ⇔ describe），
+        // 且非空快照的原因必须就是该资源 —— 证明「查完一类到返回」之间无穿越窗口。
+        HotReloadSafety.resetForTest();
+        final int TOGGLES = 20000;
+        Runnable toggler = new Runnable() {
+            @Override public void run() {
+                for (int i = 0; i < TOGGLES; i++) {
+                    HotReloadSafety.beginDelayedTask("race.delayed");
+                    HotReloadSafety.endDelayedTask("race.delayed");
+                }
+            }
+        };
+        Thread tw1 = new Thread(toggler, "race-writer-1");
+        Thread tw2 = new Thread(toggler, "race-writer-2");
+        tw1.start();
+        tw2.start();
+        int violations = 0;
+        int accepts = 0;
+        int rejects = 0;
+        int rejectLogBefore = logCount("hot reload rejected");
+        for (int i = 0; i < 20000; i++) {
+            HotReloadSafety.GateSnapshot s = HotReloadSafety.inspectReloadSafety();
+            boolean cats = s.hasNativeHooks() || s.hasModuleThreads() || s.hasExternalCallbacks();
+            if (s.isClean() == cats) violations++;                       // isClean 必须与三类布尔互补
+            if (s.isClean() && !"(clean)".equals(s.describe())) violations++;
+            if (!s.isClean() && !s.describe().contains("race.delayed")) violations++;
+            if (i % 2500 == 0) {   // 周期性走完整入口门控（决策与原因同源自同一快照）
+                RecordingReloadingParam p = new RecordingReloadingParam();
+                if (m2.onHotReloading(p)) accepts++;
+                else rejects++;
+            }
+        }
+        tw1.join();
+        tw2.join();
+        check(violations == 0, "并发压力下 2 万次快照全部自洽（violations=" + violations + "）");
+        check(HotReloadSafety.inspectReloadSafety().isClean()
+                && "(clean)".equals(HotReloadSafety.describe()),
+                "写线程结束后延时任务计数归零、回到干净态");
+        check(accepts + rejects == 8
+                && logCount("hot reload rejected") - rejectLogBefore == rejects,
+                "并发下入口门控 8 次决策稳定且拒绝必记日志（accepts=" + accepts + " rejects=" + rejects + "）");
+        // 发布屏障：登记线程完成后，后续任意次判定都不得漏检该资源（闩语义）
+        final CountDownLatch published = new CountDownLatch(1);
+        new Thread(new Runnable() {
+            @Override public void run() {
+                HotReloadSafety.markExternalCallback("race.cb");
+                published.countDown();
+            }
+        }, "race-publisher").start();
+        published.await();
+        int misses = 0;
+        for (int i = 0; i < 500; i++) {
+            HotReloadSafety.GateSnapshot s = HotReloadSafety.inspectReloadSafety();
+            if (s.isClean() || !s.describe().contains("race.cb")) misses++;
+        }
+        check(misses == 0, "已发布的外部回调登记在 500 次判定中零漏检");
+        HotReloadSafety.resetForTest();
+        check(HotReloadSafety.inspectReloadSafety().isClean()
+                && m2.onHotReloading(new RecordingReloadingParam()) == true,
+                "清理后门控恢复放行");
 
         System.out.println(failures == 0
                 ? "== PASS：全部 hot reload 安全门控断言通过 =="

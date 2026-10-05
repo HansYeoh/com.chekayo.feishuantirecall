@@ -83,10 +83,11 @@ tr -d '\r' < "$PROP" | grep -q '^targetApiVersion=102$' || fail "module.prop tar
 tr -d '\r' < "$PROP" | grep -q '^exceptionMode=protective$' || fail "module.prop exceptionMode 被改动"
 echo "E. module.prop：autoHotReload=true 在位，102/102 与 exceptionMode=protective 未动"
 
-# ── F. 门控接线 ──
-grep -q 'HotReloadSafety.hasNativeHooks()' "$B/FeishuKitModule.java" || fail "入口未消费门控一"
-grep -q 'HotReloadSafety.hasModuleThreads()' "$B/FeishuKitModule.java" || fail "入口未消费门控二"
-grep -q 'HotReloadSafety.hasExternalCallbacks()' "$B/FeishuKitModule.java" || fail "入口未消费门控三"
+# ── F. 门控接线（含审计 P1 回归：入口必须走单次锁内快照，禁止分次 has* 判定） ──
+grep -q 'HotReloadSafety.inspectReloadSafety()' "$B/FeishuKitModule.java" \
+  || fail "入口未使用单次锁内快照门控（inspectReloadSafety）"
+GATE_HAS="$(grep -n 'HotReloadSafety\.has\(NativeHooks\|ModuleThreads\|ExternalCallbacks\)' "$B/FeishuKitModule.java" || true)"
+[ -z "$GATE_HAS" ] || { echo "$GATE_HAS"; fail "入口分次调用 has* 判定门控（判定非原子，审计 P1 回归）"; }
 grep -q 'HotReloadSafety.markNativeHook' "$B/AntiRecall.java" || fail "AntiRecall 未登记 native hook"
 grep -q 'HotReloadSafety.markThread' "$B/AntiRecall.java" || fail "AntiRecall 未登记安装线程"
 grep -q 'HotReloadSafety.markExternalCallback' "$B/AntiRecall.java" || fail "AntiRecall 未登记配置桥接收器"
@@ -100,7 +101,7 @@ if grep -rnE 'import android|android\.' "$B/HotReloadSafety.java"; then
 fi
 PROD_CALLERS="$(grep -rl 'resetForTest' "$APP" | grep -v 'HotReloadSafety.java' || true)"
 [ -z "$PROD_CALLERS" ] || { echo "$PROD_CALLERS"; fail "生产代码不得调用 resetForTest"; }
-echo "F. 门控接线 OK：入口消费三类查询，AntiRecall/ResignTracker/DownloadMirror/ProfileCapture 打标齐全，HotReloadSafety 纯 java"
+echo "F. 门控接线 OK：入口走 inspectReloadSafety 单次快照（禁分次 has*），打标齐全，HotReloadSafety 纯 java"
 
 # ── G. 元数据不变：java_init.list 单入口（阶段 3 语义回归） ──
 [ "$(tr -d '\r' < "$RES/java_init.list" | tr -d '\n')" = "com.chekayo.feishuantirecall.FeishuKitModule" ] \
