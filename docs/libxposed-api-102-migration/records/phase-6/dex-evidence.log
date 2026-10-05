@@ -1,0 +1,43 @@
+# DEX 检查 (07 §7) — classes.dex 取自本次构建 feishu-antirecall.apk
+
+# ===== §7.1 legacy token 计数 (grep -aob | wc -l, 与阶段4/5口径一致) =====
+de/robv            0
+XposedBridge       0
+XposedHelpers      0
+XC_MethodHook      0
+XC_LoadPackage     0
+IXposedHook        0
+xposed_init        0
+全部应为 0
+
+# ===== §7.2 API 只引用不打包: dexdump 类定义扫描 =====
+# 命令: dexdump classes.dex | grep 'Class descriptor' | grep io/github/libxposed  → 必须为空
+DEX 类定义总数: 173
+io/github/libxposed 类定义数: 0
+(0 = API 实现类未被打包, classes.jar 仅编译期依赖 = PASS)
+
+# ===== §7.3 DEX 内 API 类型引用明细 (dexdump 字符串层, 合法消费) =====
+     72 Lio/github/libxposed/api/XposedInterface$Chain;
+      7 Lio/github/libxposed/api/XposedInterface$HookHandle;
+     53 Lio/github/libxposed/api/XposedInterface$Hooker;
+      7 Lio/github/libxposed/api/XposedInterface;
+      3 Lio/github/libxposed/api/XposedModule;
+      1 Lio/github/libxposed/api/XposedModule;Ljava/lang/String;
+      2 Lio/github/libxposed/api/XposedModuleInterface$HotReloadedParam;
+      2 Lio/github/libxposed/api/XposedModuleInterface$HotReloadingParam;
+      2 Lio/github/libxposed/api/XposedModuleInterface$ModuleLoadedParam;
+      2 Lio/github/libxposed/api/XposedModuleInterface$PackageLoadedParam;
+      2 Lio/github/libxposed/api/XposedModuleInterface$PackageReadyParam;
+
+# ===== §7.4 原始 dex 字符串计数 (与阶段4/5 对账口径) =====
+io/github/libxposed    11
+HotReloadSafety        7
+GateSnapshot           2
+inspectReloadSafety    1
+注: HotReloadSafety=7 = 1×SourceFile(HotReloadSafety.java) + 6×类型描述符(outer/$1/$GateSnapshot/$Kind 及签名);
+    阶段5记录的 5 为 P1 修复(efd3efd 新增 GateSnapshot 内部类)前计数, 修复后应为 7, 此处对账。
+
+# ===== §7.5 DEX 类定义包名分布 (无 API/stub 实现类混入) =====
+    169 com/chekayo/feishuantirecall
+      4 com/chekayo/larkresign
+(合计 173 = 169 com/chekayo/feishuantirecall + 4 com/chekayo/larkresign; 无 io/github/libxposed, 无 stubs 类)

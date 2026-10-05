@@ -1,0 +1,11 @@
+# vendored AAR SHA-256 校验 (07 §1)
+# 命令: Get-FileHash third_party/libxposed/api-102.0.0.aar -Algorithm SHA256
+# 期望: 423484A6E1807E7A423C4B88FCD8176D104318259D91791877FED88FE91479D0
+
+
+Algorithm : SHA256
+Hash      : 423484A6E1807E7A423C4B88FCD8176D104318259D91791877FED88FE91479D0
+Path      : D:\Desktop\Github\com.chekayo.feishuantirecall\third_party\libxposed\api-102.0.0.aar
+
+
+
