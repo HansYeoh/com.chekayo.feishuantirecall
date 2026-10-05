@@ -785,7 +785,7 @@ static int step_common(SqlProv *pv, void *stmt) {
         // 冲刷超窗仍未被插回的待确认删除 = 真退群 -> 提交(借每条 SQL 流过的时机, 飞书 SQL 频繁足够及时)。
         if (g_leave_notify && g_pend_n > 0) pend_flush();
         // chatters 连接捕获(供查发送人名; 独立于"保留被踢群"开关, 否则只开退群提醒时查不到名字)
-        if (pv->db_handle && strstr(t, "`chatters`")) g_chatters_db = pv->db_handle(stmt); g_chatters_pv = pv;
+        if (pv->db_handle && strstr(t, "`chatters`")) { g_chatters_db = pv->db_handle(stmt); g_chatters_pv = pv; }   // 句柄与符号库必须成对记录(缺大括号会让 pv 无条件被覆盖, 双库时配对错乱)
         // 诊断B: 成员级删除展开(可行性佐证用)
         if (g_diag_log && pv->exp &&
             (strncmp(t, "DELETE FROM `non_departmental_chatters`", 39) == 0 ||
@@ -927,7 +927,7 @@ static int step_common(SqlProv *pv, void *stmt) {
     //   紧接着 DELETE FROM messages 删记录。策略: 见"清群删除"就丢弃它并开 3s 窗口, 窗口内丢弃删消息。
     if (g_keep_kicked && t) {
         // 捕获 chatters 表所在连接(与 messages 不同库), 供导出查发送人昵称。
-        if (pv->db_handle && strstr(t, "`chatters`")) g_chatters_db = pv->db_handle(stmt); g_chatters_pv = pv;
+        if (pv->db_handle && strstr(t, "`chatters`")) { g_chatters_db = pv->db_handle(stmt); g_chatters_pv = pv; }   // 句柄与符号库必须成对记录(缺大括号会让 pv 无条件被覆盖, 双库时配对错乱)
         // 平时缓存群名(踢群前 UPDATE chats SET name=? 里解析), 供导出用。
         if (strncmp(t, "UPDATE `chats`", 14) == 0 && strstr(t, "`name`")) {
             char *e = pv->exp ? pv->exp(stmt) : nullptr;
