@@ -1,0 +1,70 @@
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:56:            XC_MethodHook addHook = new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:57:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:83:            XposedHelpers.findAndHookMethod(View.class, "setVisibility", int.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:84:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:107:            XC_MethodHook h = new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:108:                @Override protected void afterHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:121:                    android.app.Application.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:122:                @Override protected void afterHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:302:                    android.app.Application.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:303:                @Override protected void afterHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:334:                    String.class, int.class, android.app.Notification.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:335:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:361:            XC_MethodHook h = new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:362:                @Override protected void afterHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:472:                    android.graphics.drawable.Drawable.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:473:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:730:    static class SendReqHook extends XC_MethodHook {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:731:        @Override protected void beforeHookedMethod(MethodHookParam param) {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:736:    static class ReadReqHook extends XC_MethodHook {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:738:        protected void beforeHookedMethod(MethodHookParam param) {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:788:    static class InvokeHook extends XC_MethodHook {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:790:        protected void beforeHookedMethod(MethodHookParam param) {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:829:    static class MapperHook extends XC_MethodHook {
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:834:        protected void beforeHookedMethod(MethodHookParam param) {
+app/src/main/java\com\chekayo\feishuantirecall\DataMigration.java:50:            XposedBridge.hookAllMethods(Activity.class, "onActivityResult", new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\DataMigration.java:51:                @Override protected void afterHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\DownloadMirror.java:56:            XposedBridge.hookMethod(m, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\DownloadMirror.java:57:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:32:                XposedBridge.hookMethod(m, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:33:                    @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:53:                XposedBridge.hookMethod(m, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:54:                    @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:83:            XposedBridge.hookAllMethods(dep, "getAuditDependency", new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:84:                @Override protected void afterHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:97:                        XposedBridge.hookMethod(m, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:98:                            @Override protected void beforeHookedMethod(MethodHookParam q) {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:118:            int n = XposedBridge.hookAllMethods(ppd, "auditImageDownload", new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:119:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:136:            XposedBridge.hookAllMethods(y33a, "a", new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:137:                @Override protected void afterHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:159:            XposedBridge.hookMethod(m, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:160:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:62:                    new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:63:                        @Override protected void afterHookedMethod(MethodHookParam param) {
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:74:                XposedHelpers.findAndHookMethod(android.app.Activity.class, "onResume", new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:75:                    @Override protected void afterHookedMethod(MethodHookParam param) {
+app/src/main/java\com\chekayo\feishuantirecall\ProfileCapture.java:69:            XposedHelpers.findAndHookMethod(ACT, lpparam.classLoader, "onCreate", Bundle.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\ProfileCapture.java:70:                @Override protected void afterHookedMethod(MethodHookParam param) {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:41:            XposedBridge.hookMethod(m, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:42:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:62:                XposedBridge.hookMethod(m, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:63:                    @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:89:                XposedBridge.hookMethod(m, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:90:                    @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:108:            XposedHelpers.findAndHookMethod("gc6.a", cl, "onActivityResumed", android.app.Activity.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:109:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:137:                XposedBridge.hookMethod(m, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:138:                    @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:158:            int n = XposedBridge.hookAllMethods(am, "auditSecurityEvent", new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:159:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:178:            XposedHelpers.findAndHookMethod(android.view.Window.class, "setFlags", int.class, int.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:179:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:186:            XposedHelpers.findAndHookMethod(android.view.Window.class, "addFlags", int.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:187:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:195:                    android.view.WindowManager.LayoutParams.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:196:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:205:            XposedHelpers.findAndHookMethod(android.view.SurfaceView.class, "setSecure", boolean.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:206:                @Override protected void beforeHookedMethod(MethodHookParam p) {
+app/src/main/java\com\chekayo\feishuantirecall\UpdateBanner.java:32:                    "onResume", new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\UpdateBanner.java:33:                @Override protected void afterHookedMethod(MethodHookParam p) {

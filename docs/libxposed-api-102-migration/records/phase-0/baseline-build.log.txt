@@ -1,0 +1,41 @@
+JDK = C:\Users\Weirdo\AppData\Local\Programs\Android Studio\jbr (javac 21.0.10)
+SDK = C:\Users\Weirdo\AppData\Local\Android\Sdk
+Build-Tools = C:\Users\Weirdo\AppData\Local\Android\Sdk\build-tools\37.0.0
+android.jar = C:\Users\Weirdo\AppData\Local\Android\Sdk\platforms\android-37.0\android.jar
+NDK = C:\Users\Weirdo\AppData\Local\Android\Sdk\ndk\29.0.14206865
+clang++ = C:\Users\Weirdo\AppData\Local\Android\Sdk\ndk\29.0.14206865\toolchains\llvm\prebuilt\windows-x86_64\bin\clang++.exe
+Keystore = D:\Desktop\Github\com.chekayo.feishuantirecall\debug.keystore
+
+== 0. NDK compile libantirecall.so (arm64-v8a) ==
+libresign.so = 26.9KB
+libantirecall.so = 52.2KB
+
+== 1. javac stubs ==
+警告: [options] 源值 8 已过时，将在未来发行版中删除
+警告: [options] 目标值 8 已过时，将在未来发行版中删除
+警告: [options] 要隐藏有关已过时选项的警告, 请使用 -Xlint:-options。
+3 个警告
+
+== 2. javac module ==
+警告: [options] 源值 8 已过时，将在未来发行版中删除
+警告: [options] 目标值 8 已过时，将在未来发行版中删除
+警告: [options] 要隐藏有关已过时选项的警告, 请使用 -Xlint:-options。
+注: 某些输入文件使用或覆盖了已过时的 API。
+注: 有关详细信息, 请使用 -Xlint:deprecation 重新编译。
+3 个警告
+
+== 3. d8 -> classes.dex (no desugar) ==
+
+== 4. aapt2 compile + link ==
+
+== 5. 濉炲叆 classes.dex + lib/arm64-v8a/libantirecall.so ==
+
+== 6. zipalign ==
+
+== 7. apksigner sign ==
+
+== DONE ==
+V3.0 Signer: certificate DN: CN=Debug, O=Debug, C=US
+V3.0 Signer: certificate SHA-256 digest: 7c20f829bb61d2758f203130b6e3f5ef0d00141def1bd383c11efeeee23ac81d
+V3.0 Signer: certificate SHA-1 digest: 04a46b6df7caabbd5379e577ea1734eade975726
+APK = D:\Desktop\Github\com.chekayo.feishuantirecall\feishu-antirecall.apk  size=1492.8KB
