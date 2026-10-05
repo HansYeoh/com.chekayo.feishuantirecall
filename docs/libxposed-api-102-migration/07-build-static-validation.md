@@ -19,6 +19,12 @@
 - zipalign 成功。
 - apksigner 成功。
 - APK 安装包生成。
+- vendored AAR 指纹校验通过（阶段 1 审计建议，防止二进制被无意替换）：
+
+```powershell
+Get-FileHash third_party/libxposed/api-102.0.0.aar -Algorithm SHA256
+# 期望: 423484A6E1807E7A423C4B88FCD8176D104318259D91791877FED88FE91479D0
+```
 
 ## 2. Linux 构建链检查
 
