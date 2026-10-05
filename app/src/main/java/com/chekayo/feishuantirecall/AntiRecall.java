@@ -59,7 +59,9 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
     static final String MAPPER = "ax2.b";
 
     // 签名自校验: 运行 APK 的证书 SHA-256(=SHA256(signature.toByteArray()))。重打包必须重签名 -> 证书变 -> 检测到篡改。
-    static final String EXPECTED_SIG = "0cc1410f036279be41e112726687480a92e9f0a3bb5bfae09c9a23c4a764ccfd";
+    // ★ 本地构建证书(debug.keystore 自动生成): 自行构建时请用 apksigner verify --print-certs
+    //   输出的 "certificate SHA-256 digest" 替换为你自己的值。
+    static final String EXPECTED_SIG = "7c20f829bb61d2758f203130b6e3f5ef0d00141def1bd383c11efeeee23ac81d";
     // 0=未判定, 1=正版, 2=被篡改(重签名)。篡改则禁用核心功能(防撤回/防已读) + 面板告警。
     static volatile int TAMPER = 0;
     static final String STATUS = "com.ss.android.lark.chat.entity.message.Message$Status";
