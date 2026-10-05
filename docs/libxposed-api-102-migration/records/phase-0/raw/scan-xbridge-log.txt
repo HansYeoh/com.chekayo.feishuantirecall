@@ -1,0 +1,122 @@
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:76:                if (ctx == null) { XposedBridge.log(TAG + ": 拿不到 app context, 放弃"); return; }
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:77:                try { start(ctx); } catch (Throwable t) { XposedBridge.log(TAG + ": start err " + t); }
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:94:        try { Config.setFilesDir(ctx.getFilesDir()); } catch (Throwable t) { XposedBridge.log(TAG + ": setFilesDir err " + t); }
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:98:        } catch (Throwable t) { XposedBridge.log(TAG + ": AccountPaths.bind err " + t); }
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:104:        } catch (Throwable t) { XposedBridge.log(TAG + ": AccountPaths.bind err " + t); }
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:109:        XposedBridge.log(TAG + ": native loaded " + so.getAbsolutePath()
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:116:                    try { if (nativeInit()) break; } catch (Throwable e) { XposedBridge.log(TAG + ": nativeInit err " + e); return; }
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:119:                XposedBridge.log(TAG + ": nativeInit done, 等待 contact.db 句柄...");
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:139:                        catch (Throwable me) { XposedBridge.log(TAG + ": migrateLegacy err " + me); }
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:157:                            XposedBridge.log(TAG + ": 离职快照=" + rc + " 累计=" + merged
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:172:                                    XposedBridge.log(TAG + ": V3富资料 dump=" + prc + " 并入=" + n + " -> " + accProf.getAbsolutePath());
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:176:                            } catch (Throwable pe) { XposedBridge.log(TAG + ": profile dump err " + pe); }
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:187:                                    XposedBridge.log(TAG + ": 全量花名册 dump=" + rrc + " 并入=" + n
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:192:                            } catch (Throwable re) { XposedBridge.log(TAG + ": roster dump err " + re); }
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:194:                    } catch (Throwable e) { XposedBridge.log(TAG + ": dump err " + e); }
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:206:                catch (Throwable t) { XposedBridge.log(TAG + ": startup archive push err " + t); }
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:236:            XposedBridge.log(TAG + ": merge err " + t);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:131:            XposedBridge.log("[fucklark] config bridge defer failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:164:            XposedBridge.log("[fucklark] config bridge bound pkg=" + c.getPackageName());
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:168:            XposedBridge.log("[fucklark] config bridge bind failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:188:        } catch (Throwable t) { XposedBridge.log("[fucklark] notif archive init failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:191:        try { installWatermarkHook(); } catch (Throwable t) { XposedBridge.log("[fucklark] watermark init failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:194:        try { AiPeekBlock.install(); } catch (Throwable t) { XposedBridge.log("[fucklark] ai peek init failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:197:        try { FileDownloadUnlock.install(lpparam.classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] download unlock init failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:200:        try { RestrictedModeUnlock.install(lpparam.classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] restricted-mode unlock init failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:203:        try { UpdateBanner.install(lpparam.classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] update banner init failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:208:        } catch (Throwable t) { XposedBridge.log("[fucklark] download mirror init failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:216:            XposedBridge.log("[antirecall] native start failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:247:                XposedBridge.log("[antirecall] get NORMAL failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:251:                XposedBridge.log("[antirecall] 旧版飞书: Java 映射器 " + MAPPER + ".a 已挂 (legacy mode)");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:253:                XposedBridge.log("[antirecall] hook " + MAPPER + ".a failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:256:            XposedBridge.log("[antirecall] 新版飞书: " + MAPPER + ".a(Object,int) 不存在, 仅走 native SQL 层 (new mode)");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:307:        } catch (Throwable t) { XposedBridge.log("[fucklark][dl] defer install failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:340:            XposedBridge.log("[fucklark] 后台消息存档: NotificationManager.notify 已 hook (进程 " + currentProcessName() + ")");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:342:            XposedBridge.log("[fucklark] notif hook install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:424:            XposedBridge.log("[fucklark] 后台撤回 统计/还原/提示 已 hook (进程 " + currentProcessName() + ")");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:426:            XposedBridge.log("[fucklark] recall UI restore hook failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:483:            XposedBridge.log("[fucklark] 去水印: View.setForeground 已 hook (进程 " + currentProcessName() + ")");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:485:            XposedBridge.log("[fucklark] watermark hook install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:538:        XposedBridge.log("[antirecall] native lib loaded: " + out.getAbsolutePath());
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:543:        try { Config.setFilesDir(filesDir); Diag.setFilesDir(filesDir); } catch (Throwable t) { XposedBridge.log("[antirecall] setFilesDir err " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:565:            XposedBridge.log("[fucklark] antirecall=" + Config.antirecall + " resign=" + Config.resign
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:569:        } catch (Throwable t) { XposedBridge.log("[fucklark] config init err " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:599:                XposedBridge.log("[fucklark] 签名不匹配, 疑似被篡改/重打包 -> 禁用防撤回/防已读");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:607:                        XposedBridge.log("[antirecall] native hook installed (after " + i + " tries)");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:624:                    XposedBridge.log("[antirecall] tryInstall error: " + e);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:629:            XposedBridge.log("[antirecall] tryInstall gave up (libsqlcipher not seen in time)");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:661:        try { nativeLog(m); } catch (Throwable t) { XposedBridge.log("[antiread] " + m); }
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:48:            XposedBridge.log("[fucklark] 消息速览命中#" + hitCount + " via=" + via
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:75:            XposedBridge.log("[fucklark] 消息速览屏蔽: ViewGroup.addView 已 hook (进程 "
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:78:            XposedBridge.log("[fucklark] peek addView hook failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:99:            XposedBridge.log("[fucklark] 消息速览屏蔽: View.setVisibility 已 hook (进程 "
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:102:            XposedBridge.log("[fucklark] peek setVis hook failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:140:            XposedBridge.log("[fucklark] 消息速览屏蔽: TextView.setText 已 hook (进程 "
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:143:            XposedBridge.log("[fucklark] peek setText hook failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\DataMigration.java:65:            XposedBridge.log("[fucklark] migration result hook failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\DataMigration.java:121:                    XposedBridge.log("[fucklark] export backup failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\DataMigration.java:152:                    XposedBridge.log("[fucklark] import backup failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:37:                XposedBridge.log("[fucklark] 解除下载限制: FileOpenUtils." + m.getName() + " 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:39:                XposedBridge.log("[fucklark] 解除下载限制: FileOpenUtils 无唯一无参 boolean 方法, 跳过(版本变动?)");
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:42:            XposedBridge.log("[fucklark] download unlock(FileOpenUtils) install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:58:                XposedBridge.log("[fucklark] 解除下载限制: DownloadCheckUtil." + m.getName() + " 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:60:                XposedBridge.log("[fucklark] 解除下载限制: DownloadCheckUtil 无 (PhotoItem)->Result 方法, 跳过");
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:63:            XposedBridge.log("[fucklark] download unlock(DownloadCheckUtil) install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:101:                                    if (Config.diaglog) XposedBridge.log("[fucklark] 已拦下文件审计上报: " + mn
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:108:                    XposedBridge.log("[fucklark] 屏蔽下载审计: " + c.getName() + " 空转 " + n + " 个上报方法");
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:111:            XposedBridge.log("[fucklark] 屏蔽下载审计: 已挂 FileDetailModuleDependency.getAuditDependency (进程 " + AntiRecall.currentProcessName() + ")");
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:113:            XposedBridge.log("[fucklark] download-audit suppress(file) install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:122:                        if (Config.diaglog) XposedBridge.log("[fucklark] 已拦下图片审计上报: auditImageDownload("
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:127:            XposedBridge.log("[fucklark] 屏蔽下载审计: PhotoPickerModuleDependencyImpl.auditImageDownload 已 hook " + n + " 个");
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:129:            XposedBridge.log("[fucklark] download-audit suppress(image) install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:143:                    XposedBridge.log("[fucklark] 屏蔽下载审计(总出口): " + c.getName() + " 空转 " + n + " 个存图/存视频上报");
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:146:            XposedBridge.log("[fucklark] 屏蔽下载审计: 已挂审计服务访问器 y33.a.a (进程 " + AntiRecall.currentProcessName() + ")");
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:148:            XposedBridge.log("[fucklark] download-audit suppress(sink) install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:163:                        if (Config.diaglog) XposedBridge.log("[fucklark] 已拦下存图/存视频审计上报: " + mn
+app/src/main/java\com\chekayo\feishuantirecall\DownloadMirror.java:73:            XposedBridge.log("[fucklark][dl] 下载完成 toast 已 hook (UIHelper.mustacheFormat, resId=" + wantId + ")");
+app/src/main/java\com\chekayo\feishuantirecall\DownloadMirror.java:75:            XposedBridge.log("[fucklark][dl] toast hook install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\DownloadMirror.java:89:            if (ext == null) { XposedBridge.log("[fucklark][dl] getExternalFilesDir null, 跳过 observer"); return; }
+app/src/main/java\com\chekayo\feishuantirecall\DownloadMirror.java:103:            XposedBridge.log("[fucklark][dl] 下载另存 已监听: " + dir.getAbsolutePath());
+app/src/main/java\com\chekayo\feishuantirecall\DownloadMirror.java:105:            XposedBridge.log("[fucklark][dl] observer install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\DownloadMirror.java:117:                    XposedBridge.log("[fucklark][dl] 已另存到系统下载: " + name);
+app/src/main/java\com\chekayo\feishuantirecall\DownloadMirror.java:119:                    XposedBridge.log("[fucklark][dl] 另存失败(" + name + "): " + t);
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:65:                            catch (Throwable t) { XposedBridge.log("[fucklark] inject err " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:68:                XposedBridge.log("[fucklark] 已 hook 设置页 " + name);
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:83:                XposedBridge.log("[fucklark] 设置页类未命中，已 hook Activity.onResume 兜底");
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:85:                XposedBridge.log("[fucklark] hook 设置入口失败 " + t);
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:133:            XposedBridge.log("[fucklark] 高级设置卡片已注入 parent=" + parent.getClass().getSimpleName()
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:138:                XposedBridge.log("[fucklark] 高级设置卡片追加到末尾 parent=" + parent.getClass().getSimpleName());
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:140:                XposedBridge.log("[fucklark] 高级设置卡片注入失败 " + t2);
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:322:                XposedBridge.log("[fucklark] clone: new instance failed " + src.getClass().getName());
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:331:                XposedBridge.log("[fucklark] clone: applyRowText failed, fallback");
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:334:            XposedBridge.log("[fucklark] clone ok " + dest.getClass().getSimpleName());
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:337:            XposedBridge.log("[fucklark] cloneNativeSettingItem err " + t);
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:521:                XposedBridge.log("[fucklark] 锚点 " + label + " -> " + item.getClass().getSimpleName());
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:607:        XposedBridge.log("[fucklark] RowTemplate pad=" + t.padL + "," + t.padT + "," + t.padR + "," + t.padB
+app/src/main/java\com\chekayo\feishuantirecall\ProfileCapture.java:76:                            @Override public void run() { try { scrape(act); } catch (Throwable t) { XposedBridge.log("[fucklark] scrape err " + t); } }
+app/src/main/java\com\chekayo\feishuantirecall\ProfileCapture.java:81:            XposedBridge.log("[fucklark] ProfileCapture hooked UserProfileActivityV3.onCreate");
+app/src/main/java\com\chekayo\feishuantirecall\ProfileCapture.java:83:            XposedBridge.log("[fucklark] ProfileCapture hook 失败 " + t);
+app/src/main/java\com\chekayo\feishuantirecall\ProfileCapture.java:162:            XposedBridge.log("[fucklark] 归档资料 " + name + " uid=" + uid
+app/src/main/java\com\chekayo\feishuantirecall\ProfileCapture.java:167:            XposedBridge.log("[fucklark] 归档失败 " + t);
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:46:            XposedBridge.log("[fucklark] 解除保密模式限制: Chat$RestrictedModeSetting.getSwitch 已 hook (进程 "
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:49:            XposedBridge.log("[fucklark] restricted-mode unlock(getSwitch) install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:69:            XposedBridge.log("[fucklark] 解除保密模式限制: MessageRestrictedActionInterceptor 已 hook " + hooked
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:72:            XposedBridge.log("[fucklark] restricted-mode unlock(interceptor) install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:96:            XposedBridge.log("[fucklark] 屏蔽复制审计: CopyActionAuditUtil(q) 已 hook " + hooked
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:99:            XposedBridge.log("[fucklark] copy-audit suppress install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:113:            XposedBridge.log("[fucklark] 截图不上报: gc6.a.onActivityResumed 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:115:            XposedBridge.log("[fucklark] screenshot-noaudit install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:141:                            if (Config.diaglog) XposedBridge.log("[fucklark] 全审计无痕: 已拦下审计事件入库 writeData");
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:147:            XposedBridge.log("[fucklark] 全审计无痕总闸: AuditEventStorage.writeData 已 hook " + n
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:150:            XposedBridge.log("[fucklark] noaudit-all install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:162:                        if (Config.diaglog) XposedBridge.log("[fucklark] 全审计无痕(双保险): 已拦下审计中枢 auditSecurityEvent");
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:166:            XposedBridge.log("[fucklark] 全审计无痕(双保险): AuditManager.auditSecurityEvent 已 hook " + n
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:169:            XposedBridge.log("[fucklark] noaudit-all(AuditManager) install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:183:        } catch (Throwable t) { XposedBridge.log("[fucklark] force-screenshot(setFlags) failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:191:        } catch (Throwable t) { XposedBridge.log("[fucklark] force-screenshot(addFlags) failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:202:        } catch (Throwable t) { XposedBridge.log("[fucklark] force-screenshot(setAttributes) failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:210:        } catch (Throwable t) { XposedBridge.log("[fucklark] force-screenshot(setSecure) failed: " + t); }
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:211:        XposedBridge.log("[fucklark] 强制截图: Window.setFlags/addFlags/setAttributes + SurfaceView.setSecure 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
+app/src/main/java\com\chekayo\feishuantirecall\UpdateBanner.java:41:            XposedBridge.log("[fucklark] 更新横幅: MainActivity.onResume 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
+app/src/main/java\com\chekayo\feishuantirecall\UpdateBanner.java:43:            XposedBridge.log("[fucklark] update banner install failed: " + t);
+app/src/main/java\com\chekayo\feishuantirecall\UpdateBanner.java:134:            XposedBridge.log("[fucklark] show update banner failed: " + t);

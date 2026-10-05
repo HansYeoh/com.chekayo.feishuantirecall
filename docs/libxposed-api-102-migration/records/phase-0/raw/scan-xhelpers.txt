@@ -1,0 +1,41 @@
+app/src/main/java\com\chekayo\larkresign\ResignTracker.java:87:            Object app = XposedHelpers.callStaticMethod(at, "currentApplication");
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:71:            try { XposedHelpers.findAndHookMethod(ViewGroup.class, "addView", View.class, addHook); } catch (Throwable ignored) {}
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:72:            try { XposedHelpers.findAndHookMethod(ViewGroup.class, "addView", View.class, int.class, addHook); } catch (Throwable ignored) {}
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:73:            try { XposedHelpers.findAndHookMethod(ViewGroup.class, "addView", View.class, ViewGroup.LayoutParams.class, addHook); } catch (Throwable ignored) {}
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:74:            try { XposedHelpers.findAndHookMethod(ViewGroup.class, "addView", View.class, int.class, ViewGroup.LayoutParams.class, addHook); } catch (Throwable ignored) {}
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:83:            XposedHelpers.findAndHookMethod(View.class, "setVisibility", int.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:133:                XposedHelpers.findAndHookMethod(TextView.class, "setText",
+app/src/main/java\com\chekayo\feishuantirecall\AiPeekBlock.java:137:                XposedHelpers.findAndHookMethod(TextView.class, "setText",
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:113:            Object app = XposedHelpers.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:120:            XposedHelpers.findAndHookMethod(android.app.Instrumentation.class, "callApplicationOnCreate",
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:245:                normal = XposedHelpers.getStaticObjectField(XposedHelpers.findClass(STATUS, cl), "NORMAL");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:250:                XposedHelpers.findAndHookMethod(MAPPER, cl, "a", Object.class, int.class, new MapperHook(normal));
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:284:            Object app = XposedHelpers.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:294:            Object app = XposedHelpers.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:301:            XposedHelpers.findAndHookMethod(android.app.Instrumentation.class, "callApplicationOnCreate",
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:314:            Object app = XposedHelpers.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:333:            XposedHelpers.findAndHookMethod(android.app.NotificationManager.class, "notify",
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:417:                XposedHelpers.findAndHookMethod(android.widget.TextView.class, "setText",
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:421:                XposedHelpers.findAndHookMethod(android.widget.TextView.class, "setText",
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:471:            XposedHelpers.findAndHookMethod(android.view.View.class, "setForeground",
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:588:                    Object app = XposedHelpers.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:666:        Class<?> sdk = XposedHelpers.findClass(SDK_CLASS, cl);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:799:                    try { cmd = (Integer) XposedHelpers.callMethod(a0, "getValue"); }
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:822:            Object s = XposedHelpers.callMethod(content, "getText");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:839:                Object m = XposedHelpers.callMethod(mi, "getMessage");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:841:                String id = String.valueOf(XposedHelpers.callMethod(m, "getId"));
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:842:                Object c = XposedHelpers.callMethod(m, "getContent");
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:848:                    XposedHelpers.callMethod(m, "setMessageContent", cached);
+app/src/main/java\com\chekayo\feishuantirecall\AntiRecall.java:850:                        try { XposedHelpers.callMethod(m, "setStatus", normal); } catch (Throwable ignore) {}
+app/src/main/java\com\chekayo\feishuantirecall\FileDownloadUnlock.java:50:            final Object allow = XposedHelpers.getStaticObjectField(res, "ALLOW");
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:61:                XposedHelpers.findAndHookMethod(name, cl, "onResume",
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:74:                XposedHelpers.findAndHookMethod(android.app.Activity.class, "onResume", new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:91:        Object v = XposedHelpers.callMethod(fragment, "getView");
+app/src/main/java\com\chekayo\feishuantirecall\FuckLarkSettings.java:459:                de.robv.android.xposed.XposedHelpers.callMethod(row, m, text);
+app/src/main/java\com\chekayo\feishuantirecall\ProfileCapture.java:69:            XposedHelpers.findAndHookMethod(ACT, lpparam.classLoader, "onCreate", Bundle.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:108:            XposedHelpers.findAndHookMethod("gc6.a", cl, "onActivityResumed", android.app.Activity.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:178:            XposedHelpers.findAndHookMethod(android.view.Window.class, "setFlags", int.class, int.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:186:            XposedHelpers.findAndHookMethod(android.view.Window.class, "addFlags", int.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:194:            XposedHelpers.findAndHookMethod(android.view.Window.class, "setAttributes",
+app/src/main/java\com\chekayo\feishuantirecall\RestrictedModeUnlock.java:205:            XposedHelpers.findAndHookMethod(android.view.SurfaceView.class, "setSecure", boolean.class, new XC_MethodHook() {
+app/src/main/java\com\chekayo\feishuantirecall\UpdateBanner.java:31:            XposedHelpers.findAndHookMethod("com.ss.android.lark.main.app.MainActivity", cl,
