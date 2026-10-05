@@ -3,7 +3,7 @@
 - **项目**：FeishuKit / `com.chekayo.feishuantirecall`
 - **目标**：从 legacy Xposed API 迁移到 libxposed API 102
 - **文档日期**：2026-10-05
-- **当前状态**：阶段 0、1、2、3、4 已完成且审计通过（阶段 4 见 `records/phase-4/`：40 注册点/122 日志/19 反射全部切换，stubs/de/robv 已删，DEX legacy 计数清零；审计非阻塞备注「脚本 classpath 可移植性」已当场修复）；阶段 5 hot reload 安全策略已实现待审计（见 `records/phase-5/`：`HotReloadSafety` 三类资源门控 + `onHotReloaded` 新一代入口，行为测试 40/40、阶段 3/4 回归、独立编译门、全链路构建全 PASS）；下一阶段：阶段 6 本机验证（07-build-static-validation.md）
+- **当前状态**：阶段 0、1、2、3、4、5 已完成且审计通过（阶段 5 见 `records/phase-5/`：`HotReloadSafety` 三类资源门控 + `onHotReloaded` 新一代入口；第一轮审计 P1「门控判定非原子」已修复为 `inspectReloadSafety()` 单次锁内快照并补并发回归，行为测试 49/49，复审通过）；下一阶段：阶段 6 本机验证（07-build-static-validation.md）
 - **适用分支**：从当前 `main` 分支创建迁移分支
 
 ## 1. 目标与边界
