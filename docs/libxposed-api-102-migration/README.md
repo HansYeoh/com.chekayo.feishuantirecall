@@ -3,7 +3,7 @@
 - **项目**：FeishuKit / `com.chekayo.feishuantirecall`
 - **目标**：从 legacy Xposed API 迁移到 libxposed API 102
 - **文档日期**：2026-10-05
-- **当前状态**：方案已确认，尚未开始改码
+- **当前状态**：阶段 0（基线与清单）、阶段 1（构建与元数据）已完成，见 `records/`；阶段 2 待开始
 - **适用分支**：从当前 `main` 分支创建迁移分支
 
 ## 1. 目标与边界

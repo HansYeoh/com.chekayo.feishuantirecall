@@ -84,6 +84,13 @@ echo "Keystore = $KS"
 rm -rf "$BUILD"
 mkdir -p "$BUILD/stubs" "$BUILD/app"
 
+# libxposed API 102: 从 AAR 解出 classes.jar（仅编译期，不进模块 DEX）
+XAPI_AAR="$PROJ/third_party/libxposed/api-102.0.0.aar"
+[[ -f "$XAPI_AAR" ]] || die "libxposed API AAR not found: $XAPI_AAR (see third_party/libxposed/README.md)"
+mkdir -p "$BUILD/libxposed"
+( cd "$BUILD/libxposed" && "$JDKHOME/bin/jar" -xf "$XAPI_AAR" classes.jar )
+[[ -f "$BUILD/libxposed/classes.jar" ]] || die "failed to extract classes.jar from $XAPI_AAR"
+
 echo; echo "== 0. NDK compile libantirecall.so (arm64-v8a) =="
 NJNI="$PROJ/native/jni"
 "$CLANGPP" --target=aarch64-linux-android24 -fPIC -shared -O2 -fvisibility=hidden \
@@ -103,31 +110,41 @@ echo "libantirecall.so = $(awk "BEGIN{printf \"%.1f\", $(stat -c%s "$BUILD/liban
 echo "libresign.so = $(awk "BEGIN{printf \"%.1f\", $(stat -c%s "$BUILD/libresign.so")/1024}")KB"
 
 echo; echo "== 1. javac stubs =="
+# stubs/java/lang/invoke/LambdaMetafactory.java 是 -source 8 的 lambda 编译桩，与 Xposed 无关；
+# 将来清理 legacy stubs(de/robv) 时必须保留它。
 find "$PROJ/stubs" -name '*.java' > "$BUILD/stub.list"
 "$JAVAC" --release 8 -d "$BUILD/stubs" @"$BUILD/stub.list"
 
 echo; echo "== 2. javac module =="
 find "$PROJ/app/src/main/java" -name '*.java' > "$BUILD/src.list"
-"$JAVAC" -g -encoding UTF-8 -source 8 -target 8 -bootclasspath "$ANDROID_JAR" -cp "$BUILD/stubs" -d "$BUILD/app" @"$BUILD/src.list"
+"$JAVAC" -g -encoding UTF-8 -source 8 -target 8 -bootclasspath "$ANDROID_JAR" -cp "$BUILD/stubs:$BUILD/libxposed/classes.jar" -d "$BUILD/app" @"$BUILD/src.list"
 
-echo; echo "== 3. d8 -> classes.dex (no desugar) =="
+echo; echo "== 3. d8 -> classes.dex =="
+# min-api 29: Java 8 lambda/invokedynamic 原生支持，无需 --no-desugaring。
+# d8 输入只含 $BUILD/app 的类；libxposed classes.jar 仅编译期依赖，不得进入 DEX。
 find "$BUILD/app" -name '*.class' > "$BUILD/cls.list"
-"$D8" --min-api 22 --no-desugaring --output "$BUILD" @"$BUILD/cls.list"
+"$D8" --min-api 29 --output "$BUILD" @"$BUILD/cls.list"
 
 echo; echo "== 4. aapt2 compile + link =="
 "$AAPT2" compile --dir "$PROJ/app/src/main/res" -o "$BUILD/res.zip"
 "$AAPT2" link -o "$BUILD/app-unsigned.apk" -I "$ANDROID_JAR" \
   --manifest "$PROJ/app/src/main/AndroidManifest.xml" \
   -A "$PROJ/app/src/main/assets" \
-  --min-sdk-version 22 --target-sdk-version 34 \
+  --min-sdk-version 29 --target-sdk-version 34 \
   "$BUILD/res.zip"
 
-echo; echo "== 5. 塞入 classes.dex + lib/arm64-v8a/libantirecall.so =="
-mkdir -p "$BUILD/stage/lib/arm64-v8a"
+echo; echo "== 5. 塞入 classes.dex + lib/arm64-v8a/*.so + META-INF/xposed =="
+mkdir -p "$BUILD/stage/lib/arm64-v8a" "$BUILD/stage/META-INF/xposed"
 cp "$BUILD/classes.dex" "$BUILD/stage/classes.dex"
 cp "$BUILD/libantirecall.so" "$BUILD/stage/lib/arm64-v8a/libantirecall.so"
 cp "$BUILD/libresign.so" "$BUILD/stage/lib/arm64-v8a/libresign.so"
-( cd "$BUILD/stage" && zip -q -X "$BUILD/app-unsigned.apk" classes.dex lib/arm64-v8a/libantirecall.so lib/arm64-v8a/libresign.so )
+# modern Xposed 元数据：追加到 APK 根目录 META-INF/xposed/（框架按此发现入口，不在 assets/）
+RES="$PROJ/app/src/main/resources"
+for f in java_init.list module.prop scope.list; do
+  [[ -f "$RES/META-INF/xposed/$f" ]] || die "modern metadata missing: META-INF/xposed/$f"
+  cp "$RES/META-INF/xposed/$f" "$BUILD/stage/META-INF/xposed/$f"
+done
+( cd "$BUILD/stage" && zip -q -X "$BUILD/app-unsigned.apk" classes.dex lib/arm64-v8a/libantirecall.so lib/arm64-v8a/libresign.so META-INF/xposed/java_init.list META-INF/xposed/module.prop META-INF/xposed/scope.list )
 
 echo; echo "== 6. zipalign =="
 "$ZIPALIGN" -p -f 4 "$BUILD/app-unsigned.apk" "$BUILD/app-aligned.apk"

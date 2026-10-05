@@ -1,0 +1,3 @@
+# Xposed 框架按字节读取模块元数据：java_init.list 若被 checkout 成 CRLF，
+# 入口类名会带 \r 导致框架找不到入口。这些文件必须保持 LF。
+app/src/main/resources/META-INF/xposed/* text eol=lf

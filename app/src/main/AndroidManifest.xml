@@ -4,18 +4,14 @@
     android:versionCode="31"
     android:versionName="1.8.9">
 
-    <uses-sdk android:minSdkVersion="22" android:targetSdkVersion="34" />
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="34" />
 
     <application
         android:allowBackup="false"
         android:extractNativeLibs="true"
         android:label="FeishuKit"
+        android:description="@string/module_description"
         android:icon="@drawable/module_logo">
-
-        <meta-data android:name="xposedmodule" android:value="true" />
-        <meta-data android:name="xposeddescription" android:value="FeishuKit：防撤回 / 防已读 / 离职档案。设置在飞书「设置 → 实验室」后的「模块设置」" />
-        <meta-data android:name="xposedminversion" android:value="82" />
-        <meta-data android:name="xposedscope" android:resource="@array/xposedscope" />
 
         <!--
           模块设置页（也是桌面入口）。
