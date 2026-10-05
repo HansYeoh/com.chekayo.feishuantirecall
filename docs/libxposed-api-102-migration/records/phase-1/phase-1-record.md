@@ -66,3 +66,14 @@
 
 - 入口类 `FeishuKitModule` 尚不存在（阶段 3），当前 APK 在任何框架下均不可加载，属预期中间态。
 - 下一步：阶段 2（运行时桥接层）—— `ModuleRuntime`/`ModuleLog`/反射/hook 桥接，先让新 API 单独可编译。
+
+## 审计结论（2026-10-05）：通过
+
+同事针对 commit `2934a28` 定点审计（未重新构建、未覆盖 APK、未修改工作区），核对项全部通过：提交范围仅涉及阶段 1 计划、native/jni 与配置/数据冻结文件零改动、版本号未变；AAR 实测 SHA-256 与记录一致；两份构建脚本的 classes.jar 处理/d8 参数/aapt2 参数/META-INF 打包逐项核对无误；元数据三件套、.gitattributes LF 锁、legacy 清理（Manifest 4 项 meta-data、`assets/xposed_init`、`arrays.xml`、minSdk 29、`android:description`）确认完成。
+
+审计确认的两条阶段边界（可接受，但构成后续硬性验收项）：
+
+1. `FeishuKitModule` 尚不存在，`java_init.list` 已指向它，阶段 1 产物不可被 modern 框架加载——阶段拆分的预期状态；**阶段 3 必须把入口类可加载作为硬性验收项**。
+2. `stubs/de/robv/android/xposed` 仍参与编译（记录中偏差 1）——**阶段 4 完成 legacy hook 收口后必须删除，并重做源码、构建脚本和 DEX 静态检查**。
+
+审计建议（已采纳）：构建脚本目前只检查 AAR 存在性、不校验 SHA-256，阶段 1 不返工，已在阶段 6 文档 [07-build-static-validation.md](../../07-build-static-validation.md) 第 1 节加入 vendored AAR 指纹校验项。
