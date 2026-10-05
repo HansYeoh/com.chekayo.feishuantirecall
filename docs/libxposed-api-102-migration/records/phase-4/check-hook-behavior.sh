@@ -43,7 +43,7 @@ unzip -p "$AAR" classes.jar > "$WORK/classes.jar" || fail "extract classes.jar"
 # 全量编译：全部 app 源码 + 本测试（无 stubs classpath）
 "$JAVAC" -g -encoding UTF-8 -source 8 -target 8 \
   -bootclasspath "$ANDROID_JAR" \
-  -cp "$WORKJ/classes.jar;$ANDROID_JAR" \
+  -cp "$WORKJ/classes.jar$SEP$ANDROID_JAR" \
   -d "$WORKJ/out" \
   $(find "$APP" -name '*.java') "$PHASE4/workbench/HookMigrationBehaviorTest.java" \
   2> "$WORK/javac.err" || { cat "$WORK/javac.err" >&2; fail "javac failed"; }
