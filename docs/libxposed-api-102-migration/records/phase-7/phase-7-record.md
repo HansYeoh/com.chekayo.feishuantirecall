@@ -50,8 +50,8 @@ restart3 时点逐进程记录：
 |---|---|---|
 | 防撤回 | `recallui.setText`×2 + antirecall native SQL 层（wcdb2/sqlcipher 双库）hook installed | 待用户（测试小号发送→撤回→重进会话） |
 | 后台消息存档 | `notifarchive.notify`（NotificationManager#notify）installed | 待用户（收通知后撤回，查存档路径） |
-| 防已读 | `antiread2.readreq`×2 / `sendreq`×6（hookAllConstructors）installed | 待用户（打开未读会话不回复） |
-| 回复已读窗口 | 同上 sendreq 系列 installed | 待用户（先查看后回复） |
+| 防已读 | `antiread2.readreq`×2 / `sendreq`×6（hookAllConstructors）installed | **已验证**：浏览抑制正常（见 §3.1） |
+| 回复已读窗口 | 同上 sendreq 系列 installed | **已验证（带载体局限）**：见 §3.1 |
 | 去水印 | `dewatermark.setForeground` installed | 待用户 |
 | AI 速览屏蔽 | `aipeek.addView`×4 + `setVisibility` + `setText`×2 installed | 待用户（会话+搜索页） |
 | 下载解锁 | `dlunlock.fileopen` + `downloadcheck` installed | 待用户（加密图片/文件下载） |
@@ -62,6 +62,15 @@ restart3 时点逐进程记录：
 | ProfileCapture | `profilecapture.onCreate` installed | 待用户（打开资料页） |
 | 离职统计 | native dump 全链路真机跑通：离职快照 59 行、V3 富资料 369 行、全量花名册 660 行，JSON 落盘 `files/accounts/<uid-hash>/resign_tracker/`（路径按目标包+账号隔离） | 已由 native 自动完成，用户可核对数据页展示 |
 | 下载镜像 | `dlmirror.mustacheFormat` installed + FileObserver 已监听 `Android/data/com.ss.android.lark/files/Lark/download` | 待用户（完成一次下载看公共 Download 复制） |
+
+### 3.1 防已读 / 回复已读窗口 行为层验证（2026-10-06 01:24~01:35，真机实测三轮）
+
+背景：用户与测试小号对测（小号为普通客户端，测试手机为装模块的工作账号设备；小号另用桌面端观察对侧视角）。机器侧后台采集 `LSPosedFramework`/`antiread-j` 行（`build/phase7-device/live-antiread-test.log`，本地留存）。
+
+- **浏览抑制（防已读本体）PASS**：测试手机浏览小号消息产生的全部 `UpdateMessagesMeReadRequest` 均走 `清空(浏览,暂存)` 分支（READ_REQ #2~#8、#10~#21，ids 全部 N->0），小号侧持续显示未读——功能生效。
+- **回复窗口放行链路 PASS（端到端）**：`01:32:44 READ_REQ #9 ids:0->9 maxPos=38 sendWin=true 放行(回复,补9条)`——回复瞬间开窗 → 飞书发出回复时已读推送（0 ids + maxPos，与代码注释模型一致）→ 模块把暂存 9 条 ids 合并放行 → 小号侧对应消息变已读。拦截/暂存/开窗/合并/放行五环在 API 102 迁移版上全部实测工作。
+- **载体局限（8.1.12 实测，非迁移回归）**：回复时伴随的已读推送**仅在进入会话后的第一次发送时出现**；停留会话内连续回复时窗口内零载体（#9 之后无任何 `放行`），暂存 ids 无载体可补，对侧持续未读。此即 `AntiRecall.java:716-718` 文档化局限（"无载体回填 → 仍未读(退出再进即可)"）的 8.x 表现；legacy 与迁移版机制逐字一致，且放行链路已实测存活，回归排除。可用操作模式：退出会话→重进→回复（首次发送必带载体）。
+- 第一轮测试（01:00 前后）失败原因：阶段 7 机器侧 F03/F04 验证的 force-stop 与用户测试窗口重叠，进程内存态 `PENDING_READ` 暂存被清——测试干扰，非代码问题；已留档避免复审误解。
 
 ## 4. Native 回归（08 §4）——全部 PASS
 
