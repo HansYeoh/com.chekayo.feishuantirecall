@@ -85,13 +85,25 @@ typedef void*       (*dbhandle_t)(void*);
 typedef const char* (*dbfilename_t)(void*, const char*);
 typedef int         (*keyv2_t)(void*, const char*, const void*, int);
 
-static prepare_t   orig_prepare = nullptr;  // sqlite3_prepare_v2 原始 (trampoline)
-static step_t      p_step    = nullptr;
-static coltext_t   p_coltext = nullptr;
-static colblob_t   p_colblob = nullptr;
-static colbytes_t  p_colbytes= nullptr;
-static finalize_t  p_finalize= nullptr;
-static dbfilename_t p_dbfile = nullptr;
+// ── sqlite provider: 8.x 的 contact.db 可能走 libwcdb2.so 的 sqlite(消息库已确认迁移),
+//    7.x/旧库走 libsqlcipher.so。两库各 hook 一份 prepare_v2, 按库配符号(句柄不通用)。
+struct RProv {
+    const char *so;
+    bool gave_up, installed;
+    prepare_t   orig_prepare;   // sqlite3_prepare_v2 原始 (trampoline)
+    step_t      step;
+    coltext_t   coltext;
+    colblob_t   colblob;
+    colbytes_t  colbytes;
+    finalize_t  finalize;
+    dbfilename_t dbfile;
+};
+static RProv g_rp[2] = {
+    { "libwcdb2.so" },       // 8.x(优先; 7.x 无此库则恒未装, 无害)
+    { "libsqlcipher.so" },   // 7.x + 8.x 旧组件库
+};
+static int my_prepare_wcdb(void*, const char*, int, void**, const char**);
+static int my_prepare_cipher(void*, const char*, int, void**, const char**);
 
 static void* g_contact_db = nullptr;   // 最近抓到的 contact.db 句柄(诊断用)
 static bool  g_installed  = false;
@@ -149,16 +161,16 @@ static void writeUnion() {
 // 在【DB 自己的线程】上查询该 contact.db 的离职行, 去重并入 union, 再全量写文件。
 // 注: chatters 表无真实离职时间列(update_time=本地行刷新时刻; expire_time=缓存TTL,未来日期;
 //     work_status 空)。真实离职日期只在服务器端, 未缓存本地 -> 客户端无法据此排序。
-static void doDump(void* db) {
+static void doDump(RProv* pv, void* db) {
     const char* sql = "SELECT id, name, en_us_name, alias, another_name, tenant_id, update_time, is_frozen "
                       "FROM chatters WHERE is_resigned=1 ORDER BY update_time DESC";
     void* stmt = nullptr;
-    int rc = orig_prepare(db, sql, -1, &stmt, nullptr);
+    int rc = pv->orig_prepare(db, sql, -1, &stmt, nullptr);
     if (rc != 0 || !stmt) { LOGE("doDump prepare rc=%d", rc); if(g_dump_result==-999) g_dump_result=-2; return; }
 
-    auto col = [&](int i)->const char*{ const unsigned char* c=p_coltext(stmt,i); return c?(const char*)c:""; };
+    auto col = [&](int i)->const char*{ const unsigned char* c=pv->coltext(stmt,i); return c?(const char*)c:""; };
     int added = 0;
-    while (p_step(stmt) == 100 /*SQLITE_ROW*/) {
+    while (pv->step(stmt) == 100 /*SQLITE_ROW*/) {
         const char* id = col(0);
         if (!id || !*id || uid_seen(id) || g_un>=MAXR) continue;
         char e_id[64],e_name[256],e_en[256],e_alias[256],e_ann[256],e_tid[64],e_ut[64],e_fz[16];
@@ -172,7 +184,7 @@ static void doDump(void* db) {
             e_id,e_name,e_en,e_alias,e_ann,e_tid,e_ut,e_fz);
         g_uid[g_un]=strdup(e_id); g_urow[g_un]=strdup(row); g_un++; added++;
     }
-    p_finalize(stmt);
+    pv->finalize(stmt);
     writeUnion();
     g_dump_result = g_un;
     LOGI("doDump handle=%p +%d rows, union=%d", db, added, g_un);
@@ -183,27 +195,27 @@ static void doDump(void* db) {
 static void* g_prof_dumped_this_arm[16]; static int g_prof_ndumped = 0;
 static bool prof_dumped_this_arm(void* db){ for(int i=0;i<g_prof_ndumped;i++) if(g_prof_dumped_this_arm[i]==db) return true; return false; }
 
-static void doProfileDump(void* db) {
+static void doProfileDump(RProv* pv, void* db) {
     const char* sql =
         "SELECT v.chatter_id, c.tenant_id, c.name, c.is_resigned, v.profile "
         "FROM chatter_profiles_v3 v JOIN chatters c ON c.id=v.chatter_id "
         "WHERE v.profile IS NOT NULL AND length(v.profile)>0";
     void* stmt = nullptr;
-    int rc = orig_prepare(db, sql, -1, &stmt, nullptr);
+    int rc = pv->orig_prepare(db, sql, -1, &stmt, nullptr);
     if (rc != 0 || !stmt) { LOGE("doProfileDump prepare rc=%d", rc); if(g_prof_result==-999) g_prof_result=-2; return; }
     const char* mode = (g_prof_ndumped == 0) ? "w" : "a";   // 本 arm 首个句柄清空, 其余追加
     FILE* out = fopen(g_prof_path, mode);
-    if (!out) { p_finalize(stmt); if(g_prof_result==-999) g_prof_result=-3; return; }
+    if (!out) { pv->finalize(stmt); if(g_prof_result==-999) g_prof_result=-3; return; }
     static const char HEX[] = "0123456789abcdef";
     int added = 0;
-    while (p_step(stmt) == 100 /*SQLITE_ROW*/) {
+    while (pv->step(stmt) == 100 /*SQLITE_ROW*/) {
         // 先读 4 个文本列, 再读 blob 列(不同列, 不触发同列类型转换失效)
-        const unsigned char* cid = p_coltext(stmt, 0);
-        const unsigned char* tid = p_coltext(stmt, 1);
-        const unsigned char* nm  = p_coltext(stmt, 2);
-        const unsigned char* rs  = p_coltext(stmt, 3);
-        const unsigned char* blob = (const unsigned char*) p_colblob(stmt, 4);
-        int bn = p_colbytes(stmt, 4);
+        const unsigned char* cid = pv->coltext(stmt, 0);
+        const unsigned char* tid = pv->coltext(stmt, 1);
+        const unsigned char* nm  = pv->coltext(stmt, 2);
+        const unsigned char* rs  = pv->coltext(stmt, 3);
+        const unsigned char* blob = (const unsigned char*) pv->colblob(stmt, 4);
+        int bn = pv->colbytes(stmt, 4);
         if (!blob || bn <= 0) continue;
         char e_cid[64], e_tid[64], e_nm[256], e_rs[16];
         jesc(e_cid, sizeof(e_cid), cid ? (const char*)cid : "");
@@ -220,7 +232,7 @@ static void doProfileDump(void* db) {
         fputs("\"}\n", out);
         added++;
     }
-    p_finalize(stmt);
+    pv->finalize(stmt);
     fclose(out);
     g_prof_rows += added;
     g_prof_result = g_prof_rows;
@@ -233,14 +245,14 @@ static void doProfileDump(void* db) {
 static void* g_roster_dumped_this_arm[16]; static int g_roster_ndumped = 0;
 static bool roster_dumped_this_arm(void* db){ for(int i=0;i<g_roster_ndumped;i++) if(g_roster_dumped_this_arm[i]==db) return true; return false; }
 
-static void doRosterDump(void* db) {
+static void doRosterDump(RProv* pv, void* db) {
     // chatter_profiles_v3 可能不存在(老库/未登录富资料) -> 探测后决定 SQL
     bool hasV3 = false;
     {
         void* chk = nullptr;
-        if (orig_prepare(db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chatter_profiles_v3' LIMIT 1", -1, &chk, nullptr) == 0 && chk) {
-            if (p_step(chk) == 100 /*ROW*/) hasV3 = true;
-            p_finalize(chk);
+        if (pv->orig_prepare(db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chatter_profiles_v3' LIMIT 1", -1, &chk, nullptr) == 0 && chk) {
+            if (pv->step(chk) == 100 /*ROW*/) hasV3 = true;
+            pv->finalize(chk);
         }
     }
     // LEFT JOIN: 全员都落, 有富资料的顺带把 blob hex 带上
@@ -249,26 +261,26 @@ static void doRosterDump(void* db) {
           "FROM chatters c LEFT JOIN chatter_profiles_v3 v ON v.chatter_id=c.id"
         : "SELECT c.id, c.tenant_id, c.name, c.is_resigned, NULL AS profile FROM chatters c";
     void* stmt = nullptr;
-    int rc = orig_prepare(db, sql, -1, &stmt, nullptr);
+    int rc = pv->orig_prepare(db, sql, -1, &stmt, nullptr);
     if (rc != 0 || !stmt) { LOGE("doRosterDump prepare rc=%d", rc); if(g_roster_result==-999) g_roster_result=-2; return; }
     const char* mode = (g_roster_ndumped == 0) ? "w" : "a";   // 本 arm 首个句柄清空, 其余追加
     FILE* out = fopen(g_roster_path, mode);
-    if (!out) { p_finalize(stmt); if(g_roster_result==-999) g_roster_result=-3; return; }
+    if (!out) { pv->finalize(stmt); if(g_roster_result==-999) g_roster_result=-3; return; }
     static const char HEX[] = "0123456789abcdef";
     int added = 0;
-    while (p_step(stmt) == 100 /*SQLITE_ROW*/) {
-        const unsigned char* cid = p_coltext(stmt, 0);
-        const unsigned char* tid = p_coltext(stmt, 1);
-        const unsigned char* nm  = p_coltext(stmt, 2);
-        const unsigned char* rs  = p_coltext(stmt, 3);
+    while (pv->step(stmt) == 100 /*SQLITE_ROW*/) {
+        const unsigned char* cid = pv->coltext(stmt, 0);
+        const unsigned char* tid = pv->coltext(stmt, 1);
+        const unsigned char* nm  = pv->coltext(stmt, 2);
+        const unsigned char* rs  = pv->coltext(stmt, 3);
         if (!cid || !*cid) continue;            // 空 id 跳过
         char e_cid[64], e_tid[64], e_nm[256], e_rs[16];
         jesc(e_cid, sizeof(e_cid), (const char*)cid);
         jesc(e_tid, sizeof(e_tid), tid ? (const char*)tid : "");
         jesc(e_nm,  sizeof(e_nm),  nm  ? (const char*)nm  : "");
         jesc(e_rs,  sizeof(e_rs),  rs  ? (const char*)rs  : "");
-        const unsigned char* blob = (const unsigned char*) p_colblob(stmt, 4);
-        int bn = p_colbytes(stmt, 4);
+        const unsigned char* blob = (const unsigned char*) pv->colblob(stmt, 4);
+        int bn = pv->colbytes(stmt, 4);
         fprintf(out, "{\"chatter_id\":\"%s\",\"tenant_id\":\"%s\",\"name\":\"%s\",\"is_resigned\":\"%s\",\"hex\":\"",
                 e_cid, e_tid, e_nm, e_rs);
         if (blob && bn > 0) {
@@ -281,7 +293,7 @@ static void doRosterDump(void* db) {
         fputs("\"}\n", out);
         added++;
     }
-    p_finalize(stmt);
+    pv->finalize(stmt);
     fclose(out);
     g_roster_rows += added;
     g_roster_result = g_roster_rows;
@@ -294,49 +306,68 @@ static void doRosterDump(void* db) {
 static void* g_dumped_this_arm[16]; static int g_ndumped = 0;
 static bool dumped_this_arm(void* db){ for(int i=0;i<g_ndumped;i++) if(g_dumped_this_arm[i]==db) return true; return false; }
 
-static int my_prepare(void* db, const char* sql, int n, void** ppStmt, const char** tail) {
-    int rc = orig_prepare(db, sql, n, ppStmt, tail);
-    if (db && p_dbfile) {
-        const char* fn = p_dbfile(db, "main");
+static int prepare_common(RProv* pv, void* db, const char* sql, int n, void** ppStmt, const char** tail) {
+    int rc = pv->orig_prepare(db, sql, n, ppStmt, tail);
+    if (db && pv->dbfile) {
+        const char* fn = pv->dbfile(db, "main");
         if (fn && strstr(fn, "contact.db")) {
             g_contact_db = db;
             if (g_dump_pending && !dumped_this_arm(db)) {
                 if (g_ndumped < 16) g_dumped_this_arm[g_ndumped++] = db;
-                doDump(db);              // 就在这条 DB 线程上跑, 安全; 多账号各句柄各 dump 一次
+                doDump(pv, db);          // 就在这条 DB 线程上跑, 安全; 多账号各句柄各 dump 一次
             }
-            if (g_prof_pending && p_colblob && p_colbytes && !prof_dumped_this_arm(db)) {
-                doProfileDump(db);       // mode 依赖 g_prof_ndumped(先用后加), 故先 dump 再登记
+            if (g_prof_pending && pv->colblob && pv->colbytes && !prof_dumped_this_arm(db)) {
+                doProfileDump(pv, db);   // mode 依赖 g_prof_ndumped(先用后加), 故先 dump 再登记
                 if (g_prof_ndumped < 16) g_prof_dumped_this_arm[g_prof_ndumped++] = db;
             }
-            if (g_roster_pending && p_colblob && p_colbytes && !roster_dumped_this_arm(db)) {
-                doRosterDump(db);        // 同上: mode 依赖 g_roster_ndumped, 先 dump 再登记
+            if (g_roster_pending && pv->colblob && pv->colbytes && !roster_dumped_this_arm(db)) {
+                doRosterDump(pv, db);    // 同上: mode 依赖 g_roster_ndumped, 先 dump 再登记
                 if (g_roster_ndumped < 16) g_roster_dumped_this_arm[g_roster_ndumped++] = db;
             }
         }
     }
     return rc;
 }
+static int my_prepare_wcdb(void* db, const char* sql, int n, void** ppStmt, const char** tail) {
+    return prepare_common(&g_rp[0], db, sql, n, ppStmt, tail);
+}
+static int my_prepare_cipher(void* db, const char* sql, int n, void** ppStmt, const char** tail) {
+    return prepare_common(&g_rp[1], db, sql, n, ppStmt, tail);
+}
+
+// 给一个 provider 解析符号并 hook 其 sqlite3_prepare_v2(库没加载返回 false 下次再试)
+static bool try_rprov(RProv* p) {
+    if (p->installed || p->gave_up) return p->installed;
+    uintptr_t base = find_base(p->so);
+    if (!base) return false;
+    void* prep = resolve(base, "sqlite3_prepare_v2");
+    p->step     = (step_t)      resolve(base, "sqlite3_step");
+    p->coltext  = (coltext_t)   resolve(base, "sqlite3_column_text");
+    p->colblob  = (colblob_t)   resolve(base, "sqlite3_column_blob");
+    p->colbytes = (colbytes_t)  resolve(base, "sqlite3_column_bytes");
+    p->finalize = (finalize_t)  resolve(base, "sqlite3_finalize");
+    p->dbfile   = (dbfilename_t)resolve(base, "sqlite3_db_filename");
+    LOGI("%s base=%p prepare=%p step=%p coltext=%p dbfile=%p", p->so, (void*)base, prep,
+         (void*)p->step, (void*)p->coltext, (void*)p->dbfile);
+    if (!prep || !p->step || !p->coltext || !p->finalize || !p->dbfile) {
+        LOGE("%s resolve failed, give up this provider", p->so);
+        p->gave_up = true;
+        return false;
+    }
+    A64HookFunction(prep, (void*)(p == &g_rp[0] ? my_prepare_wcdb : my_prepare_cipher),
+                    (void**)&p->orig_prepare);
+    p->installed = true;
+    LOGI("hook installed on %s sqlite3_prepare_v2 @%p", p->so, prep);
+    return true;
+}
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_chekayo_larkresign_ResignTracker_nativeInit(JNIEnv*, jclass) {
     if (g_installed) return JNI_TRUE;
-    uintptr_t base = find_base("libsqlcipher.so");
-    if (!base) return JNI_FALSE;
-    void* prep = resolve(base, "sqlite3_prepare_v2");
-    p_step     = (step_t)      resolve(base, "sqlite3_step");
-    p_coltext  = (coltext_t)   resolve(base, "sqlite3_column_text");
-    p_colblob  = (colblob_t)   resolve(base, "sqlite3_column_blob");
-    p_colbytes = (colbytes_t)  resolve(base, "sqlite3_column_bytes");
-    p_finalize = (finalize_t)  resolve(base, "sqlite3_finalize");
-    p_dbfile   = (dbfilename_t)resolve(base, "sqlite3_db_filename");
-    LOGI("base=%p prepare=%p step=%p coltext=%p colblob=%p colbytes=%p finalize=%p dbfile=%p",
-         (void*)base, prep, p_step, p_coltext, p_colblob, p_colbytes, p_finalize, p_dbfile);
-    if (!prep || !p_step || !p_coltext || !p_finalize || !p_dbfile) {
-        LOGE("resolve failed"); g_installed = true; return JNI_TRUE;
-    }
-    A64HookFunction(prep, (void*)my_prepare, (void**)&orig_prepare);
+    bool any = false;
+    for (RProv& p : g_rp) if (try_rprov(&p)) any = true;
+    if (!any) return JNI_FALSE;   // 库还没加载, Java 继续轮询
     g_installed = true;
-    LOGI("hook installed on sqlite3_prepare_v2 @%p", prep);
     return JNI_TRUE;
 }
 
