@@ -3,7 +3,7 @@
 - **项目**：FeishuKit / `com.chekayo.feishuantirecall`
 - **目标**：从 legacy Xposed API 迁移到 libxposed API 102
 - **文档日期**：2026-10-05
-- **当前状态**：阶段 0、1、2、3、4、5 已完成且审计通过（阶段 5 见 `records/phase-5/`：`HotReloadSafety` 三类资源门控 + `onHotReloaded` 新一代入口；第一轮审计 P1「门控判定非原子」已修复为 `inspectReloadSafety()` 单次锁内快照并补并发回归，行为测试 49/49，复审通过）；阶段 6 本机验证已完成待审计（见 `records/phase-6/`：build.ps1 全链路 8 阶段 + vendored AAR SHA-256 指纹校验一致、build.sh 静态对照 5 点一致 + `bash -n`、legacy 扫描零命中、APK 结构/元数据逐项通过、dexdump 类定义扫描 API 零打包、native/config/data/version 冻结边界零 diff，版本号未动；对账更正：阶段 5 记录 `HotReloadSafety=5` 为 P1 修复前陈旧计数，修复后实测 7，见 phase-6-record.md §7）；下一阶段：阶段 7 真机回归（08-device-regression.md，硬性验收：真实 LSPosed modern 加载）
+- **当前状态**：阶段 0、1、2、3、4、5、6 已完成且审计通过（阶段 6 见 `records/phase-6/`：Windows 构建通过——build.ps1 全链路 8 阶段 + vendored AAR SHA-256 指纹校验一致；Linux 构建链静态检查通过——5 点对照 + `bash -n` + 对称 diff，Linux 实机构建待上游 CI 或维护者环境补跑；legacy 扫描零命中、APK 结构/元数据逐项通过、dexdump 类定义扫描 API 零打包、native/config/data/version 冻结边界零 diff、版本号未动）；下一阶段：阶段 7 真机回归（08-device-regression.md，硬性验收：真实 LSPosed modern 加载）
 - **适用分支**：从当前 `main` 分支创建迁移分支
 
 ## 1. 目标与边界

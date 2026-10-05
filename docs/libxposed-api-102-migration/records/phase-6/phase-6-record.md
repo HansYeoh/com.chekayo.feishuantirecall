@@ -168,3 +168,25 @@ badging 与二进制 manifest 双确认：`versionCode='31' versionName='1.8.9'`
 ## 11. 下一步
 
 进入**阶段 7 真机回归**（`08-device-regression.md`）——硬性验收：LSPosed modern 环境真实加载 `FeishuKitModule` 并进入目标进程；核心功能矩阵、多进程行为、hot reload 不安全场景真机拒绝（不崩溃、不重复 hook）。本阶段所有验证均为本机静态/构建层，真机可加载性仍待阶段 7 兑现。
+
+## 12. 审计轮次
+
+### 第一轮：通过，允许进入阶段 7（2026-10-06）
+
+审计方复核 `3449c8d`（复审时工作区干净），确认本提交仅新增本机验证记录并更新状态，没有修改业务代码或构建逻辑。逐项确认通过：
+
+- Windows `build.ps1` 全链路成功，8 个阶段均有归档证据；
+- vendored AAR SHA-256 与期望值逐字符一致；
+- APK 签名证书摘要与基线及 `EXPECTED_SIG` 一致；
+- APK 必备条目齐全（classes.dex、两个 arm64 native 库、`META-INF/xposed/` 三件套），`assets/xposed_init` 不存在；
+- modern 元数据无 BOM、使用 LF、入口单一、API 版本 102/102、`autoHotReload=true`、scope 两包名正确；
+- Manifest/badging 均确认 minSdk 29 / targetSdk 34 / versionCode 31 / versionName 1.8.9；
+- legacy 七类 token 在 DEX 中全部为 0；dexdump 类定义扫描确认 `io/github/libxposed` 定义数为 0，API 仅作为编译期依赖；
+- native/jni 零 diff；version.json 零 diff；
+- 配置/数据冻结文件均未发生业务代码变化，`NotifArchive.java` 仅一行注释术语更新；
+- scripts、stubs、构建脚本目标范围 legacy 扫描零命中；
+- `HotReloadSafety` 的阶段 5 计数差异（5 → 7）已合理解释为修复后常量池计数变化，不是代码回归。
+
+**阶段限制确认（Linux 实机构建）**：审计确认 Linux 实机构建本阶段未执行的降级路径与 07 文档允许一致、原因与替代证据记录充分（WSL 中无可用的 Linux Android SDK/NDK；Windows SDK/NDK 二进制不能直接作为 Linux 构建链；已完成 `bash -n`、构建脚本迁移 diff 对称检查和关键参数逐项对照）。按审计方要求的准确表述：**Windows 构建通过，Linux 构建链静态检查通过；Linux 实机构建待上游 CI 或维护者环境补跑**。不阻塞阶段 6 出口。
+
+**最终判断：阶段 6 通过。**
