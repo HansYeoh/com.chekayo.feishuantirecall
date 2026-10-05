@@ -42,26 +42,26 @@ restart3 时点逐进程记录：
 - 模块自身进程 `com.chekayo.feishuantirecall`（LauncherActivity + ConfigProvider）不在门控/分发范围（设计如此）。
 - 设备上未出现其他飞书进程；`scope.list` 两包名外的进程均未注入（未观察到非预期进程加载模块）。
 
-## 3. 功能回归矩阵（08 §3）
+## 3. 功能回归矩阵（08 §3）—— 两轮行为测试全部执行完毕
 
-**本阶段机器侧完成的是「安装层」验证**：全部 14 项功能对应的 hook/native 链路均已成功安装并有日志在案。**行为层**（真实收发消息、撤回、已读等）按 08 文档前置条件「由用户本人操作测试小号」，留用户执行后补录本节。
+**安装层**（hook/native 链路成功安装）由机器侧完成；**行为层**由用户本人操作工作号+测试小号分两轮执行：第一轮防已读专项 01:24~01:35（§3.1，含基线对照轮），第二轮其余各项 02:00~02:30（§3.2，期间持续 logcat 抓取 52 万行，**0 FATAL**）。火点证据见 [behavior-evidence.log](behavior-evidence.log)。
 
-| 功能 | 机器侧证据（安装层） | 行为层 |
+| 功能 | 机器侧证据（安装层） | 行为层结果 |
 |---|---|---|
-| 防撤回 | `recallui.setText`×2 + antirecall native SQL 层（wcdb2/sqlcipher 双库）hook installed | 待用户（测试小号发送→撤回→重进会话） |
-| 后台消息存档 | `notifarchive.notify`（NotificationManager#notify）installed | 待用户（收通知后撤回，查存档路径） |
-| 防已读 | `antiread2.readreq`×2 / `sendreq`×6（hookAllConstructors）installed | **已验证**：浏览抑制正常（见 §3.1） |
-| 回复已读窗口 | 同上 sendreq 系列 installed | **已验证（带载体局限）**：见 §3.1 |
-| 去水印 | `dewatermark.setForeground` installed | 待用户 |
-| AI 速览屏蔽 | `aipeek.addView`×4 + `setVisibility` + `setText`×2 installed | 待用户（会话+搜索页） |
-| 下载解锁 | `dlunlock.fileopen` + `downloadcheck` installed | 待用户（加密图片/文件下载） |
-| 保密模式 | `restricted.getSwitch` + `interceptor`×3 installed | 待用户（复制/转发） |
-| 强制截图 | `forcescreenshot.setFlags/addFlags/setAttributes/setSecure` installed | 待用户（截图/录屏） |
-| 审计屏蔽 | `restricted.writeData` + `restricted.auditManager` installed | 待用户（复制/下载/截图后看审计落库） |
-| 设置入口 | `fucklarksettings.settingpage` installed；模块卡片待用户目视确认 | 待用户 |
-| ProfileCapture | `profilecapture.onCreate` installed | 待用户（打开资料页） |
-| 离职统计 | native dump 全链路真机跑通：离职快照 59 行、V3 富资料 369 行、全量花名册 660 行，JSON 落盘 `files/accounts/<uid-hash>/resign_tracker/`（路径按目标包+账号隔离） | 已由 native 自动完成，用户可核对数据页展示 |
-| 下载镜像 | `dlmirror.mustacheFormat` installed + FileObserver 已监听 `Android/data/com.ss.android.lark/files/Lark/download` | 待用户（完成一次下载看公共 Download 复制） |
+| 防撤回 | `recallui.setText`×2 + antirecall native SQL 层（wcdb2/sqlcipher 双库）hook installed | ✓ 用户第一轮实测：小号发送→撤回→重进会话，原文还原 |
+| 后台消息存档 | `notifarchive.notify`（NotificationManager#notify）installed | ✓ 用户第一轮实测：收通知后撤回，存档正确 |
+| 防已读 | `antiread2.readreq`×2 / `sendreq`×6（hookAllConstructors）installed | ✓ §3.1 + §3.2：READ_REQ 浏览读全部 `清空(浏览,暂存)`，小号侧持续未读 |
+| 回复已读窗口 | 同上 sendreq 系列 installed | ✓ 放行链路端到端 PASS（§3.1：#9 暂存 9 条合并放行，小号侧变已读）；载体局限见 §3.1 |
+| 去水印 | `dewatermark.setForeground` installed | ✓ 用户目视：图片/文件预览无姓名工号水印（静默 hook 无触发日志） |
+| AI 速览屏蔽 | `aipeek.addView`×4 + `setVisibility` + `setText`×2 installed | ✓ 用户目视：会话不出现 AI 速览条、搜索卡片不误伤；命中日志 0 条（命中日志 800ms 节流且本轮未产生 peek 目标），以安装层+目视为准 |
+| 下载解锁 | `dlunlock.fileopen` + `downloadcheck` installed | ✓ 下载并打开正常；打开文件详情页时 after 回调动态挂上 3 个审计上报方法（§3.2，动态链路真机验证） |
+| 保密模式 | `restricted.getSwitch` + `interceptor`×3 installed | ⚠️ 部分恢复（§3.2 发现 1）：复制 ✓ 下载 ✓；转发被第二道策略门拦截，与 legacy 行为等价，非迁移回归 |
+| 强制截图 | `forcescreenshot.setFlags/addFlags/setAttributes/setSecure` installed | ✓ 截图正常出画面（静默改参 hook 无触发日志） |
+| 审计屏蔽 | `restricted.writeData` + `restricted.auditManager` installed | ✓ 操作全程正常；总闸双保险在 8.1.12 实际类上挂载成功（writeData#0 + auditManager#0）；诊断日志未开故无 `已拦下` 行 |
+| 设置入口 | `fucklarksettings.settingpage` installed | ✓ 模块卡片可见、可打开进模块设置页；「高级设置卡片已注入」日志 ×4 |
+| ProfileCapture | `profilecapture.onCreate` installed | ✓ `归档资料` ×8 生效，多目标按 uid 去重合并（累计递增），日志已整体脱敏 |
+| 离职统计 | native dump 全链路真机跑通：离职快照 59 行、V3 富资料 369 行、全量花名册 660 行，JSON 落盘 `files/accounts/<uid-hash>/resign_tracker/`（路径按目标包+账号隔离） | ✓ 本轮观察到两个账号（工作号+小号）各自独立目录与快照，账号隔离真机验证 |
+| 下载镜像 | `dlmirror.mustacheFormat` installed + FileObserver 已监听 `Android/data/com.ss.android.lark/files/Lark/download` | ✓ `[dl] 已另存到系统下载` ×1，公共 Download 出现副本 |
 
 ### 3.1 防已读 / 回复已读窗口 行为层验证（2026-10-06 01:24~01:35，真机实测三轮）
 
@@ -71,6 +71,25 @@ restart3 时点逐进程记录：
 - **回复窗口放行链路 PASS（端到端）**：`01:32:44 READ_REQ #9 ids:0->9 maxPos=38 sendWin=true 放行(回复,补9条)`——回复瞬间开窗 → 飞书发出回复时已读推送（0 ids + maxPos，与代码注释模型一致）→ 模块把暂存 9 条 ids 合并放行 → 小号侧对应消息变已读。拦截/暂存/开窗/合并/放行五环在 API 102 迁移版上全部实测工作。
 - **载体局限（8.1.12 实测，非迁移回归，属模块与飞书行为的交互效应）**：基线对照轮（`Config.antiread=false` 仅记录模式，app 已读行为原生）显示**原生 8.1.12 的回复时已读推送是每条回复都发的**（`READ_REQ #29/#35/#36 ids:0->0 maxPos=66/72/73 sendWin=true 仅记录`，30 秒连续对话内 3 次）；而模块开启时载体仅在进入会话后的第一次发送出现（#9、#25 两次独立命中，之后窗口内零载体）。即模块清空浏览请求这一行为本身改变了飞书后续发送载体的条件（确切内部触发机制在请求层面无法进一步定位，属飞书读同步逻辑）。legacy 与迁移版机制逐字一致、模块侧五环链路两次端到端实测存活，**迁移回归排除**。8.1.12 上功能的实际形态：浏览保持未读；进会话后第一次回复→积压全部补发已读；停留会话连续回复→对侧看到回复但消息仍显示未读，退出重进再回复即恢复。若上游希望改善（如回复时模块主动构造带暂存 ids 的读请求作为载体），属新适配工作，不在本次迁移范围。
 - 第一轮测试（01:00 前后）失败原因：阶段 7 机器侧 F03/F04 验证的 force-stop 与用户测试窗口重叠，进程内存态 `PENDING_READ` 暂存被清——测试干扰，非代码问题；已留档避免复审误解。
+
+### 3.2 第二轮行为测试（2026-10-06 02:00~02:30）：保密模式/去水印/截图/审计/设置入口/ProfileCapture/下载镜像
+
+采集方式：用户操作期间挂持续 logcat（本地 `build/phase7-device/behavior-capture.log`，523,776 行，**0 FATAL**），脱敏证据 [behavior-evidence.log](behavior-evidence.log)（37 行：PII/uid/频道 id/文件名/安装路径已抹除）。
+
+- **去水印 / 强制截图 / AI 速览屏蔽**：用户目视 PASS（三者均为静默 hook：改参或短路，无触发日志属预期）。
+- **下载解锁（动态链路）**：打开文件详情页时，FileDownloadUnlock 的 after 回调动态挂上 `FileDetailModuleDependency$e` 的 3 个审计上报方法（02:08:51）——阶段 4 清单标注的「3 处 after 回调内动态 hook」在真机首次实测触发。
+- **下载镜像**：`[dl] 已另存到系统下载` ×1，公共 Download 出现副本。
+- **设置入口**：「高级设置卡片已注入」×4，卡片可打开进模块设置页。
+- **ProfileCapture**：`归档资料` ×8，多目标按 uid 去重合并、累计递增。
+- **审计屏蔽**：总闸双保险在 8.1.12 实际类上挂载成功（`AuditEventStorage.writeData#0` + `AuditManager#auditSecurityEvent`）；`CopyActionAuditUtil(q)`、`y33.a` 两个 7.70 专有混淆名匹配 0 个方法（与偏差 2 的 `gc6.a` 同类基线版本漂移，总闸不受影响）。
+- **防已读（延续观测）**：READ_REQ #38~#50 浏览读全部清空暂存，与 §3.1 结论一致。
+
+**发现：保密模式「转发」未解锁（复制/下载已恢复）——非迁移回归**
+
+- 现象（用户 A/B 实测）：无模块手机点转发立即弹「保密模式已开启，禁止复制转发消息」（第一道客户端预检门）；有模块手机同样操作能进转发页（第一道门被 `getSwitch`+`MessageRestrictedActionInterceptor` hook 放行），但选人后提示「**群主或管理员开启了保密模式，禁止复制和转发消息**」，转发不生效。
+- 迁移回归排除：同机转发普通消息正常（发送路径健康）；`SendReqHook` 仅开回复窗口后 `chain.proceed()` 原参透传不碰请求；`migration.onActivityResult` 按 request code 过滤不命中转发流程；interceptor 注册循环与 legacy 逐行等价（阶段 4 对账 40/40）。
+- 定性：第二道策略门在模块与 legacy 的 hook 面之外（该文案在 base.apk 资源中不存在，属 split APK，未继续深挖是客户端二级检查还是服务端 DLP）。复制/下载为本地操作故可恢复；转发在更深层被强制。8.1.12 实际形态：保密会话复制/下载恢复，转发保持拦截——与 legacy 行为等价。
+- 处置：解锁第二道门属新 hook 点=新功能决策，不混入迁移 PR，留上游维护者。
 
 ## 4. Native 回归（08 §4）——全部 PASS
 
@@ -102,28 +121,29 @@ restart3 时点逐进程记录：
 
 - 归档仅含模块相关行（`LSPosedFramework` 模块行 + native 行 + 框架 reload 行），**完整 logcat dump 不入库**（原始 dumps 留在本地 `build/phase7-device/`，该目录 gitignore）。
 - 脱敏项：账号 uid 哈希 → `<uid-hash>`；模块/目标 APK 安装路径随机段 → `…`；未含聊天正文、手机号、user/tenant ID、导出数据。
-- 归档文件：[lifecycle-f03-f04.log](lifecycle-f03-f04.log)（161 行）、[reload-gate.log](reload-gate.log)、[native-regression.log](native-regression.log)、[device-env.txt](device-env.txt)；`*.log` 按惯例 `git add -f`。
+- 归档文件：[lifecycle-f03-f04.log](lifecycle-f03-f04.log)（161 行）、[reload-gate.log](reload-gate.log)、[native-regression.log](native-regression.log)、[behavior-evidence.log](behavior-evidence.log)（37 行，行为测试火点证据）、[device-env.txt](device-env.txt)；`*.log` 按惯例 `git add -f`。
 
 ## 阶段出口对照（08「阶段出口」）
 
 | 出口条款 | 状态 |
 |---|---|
-| 国内版目标功能通过 | 机器侧（安装/生命周期/进程覆盖/native/reload 门控）全部通过；§3 行为矩阵 12 项待用户测试小号执行后补录 |
+| 国内版目标功能通过 | ✓ 机器侧全部通过 + 行为矩阵两轮执行完毕（§3.1/§3.2）；两项已知现象（回复窗口载体局限、保密模式转发第二道门）均定性为与 legacy 等价的基线行为，非迁移回归 |
 | 国际版 | 未安装，记录未测试 ✓ |
-| 多进程无重复注册和崩溃 | ✓（3 次重启 + reload 拒绝 + 换代，零 FATAL、零 skip duplicate） |
+| 多进程无重复注册和崩溃 | ✓（3 次重启 + reload 拒绝 + 换代 + 两轮行为测试，全程零 FATAL、零 skip duplicate） |
 | native loader 和配置桥正常 | ✓ |
 | hot reload 安全拒绝逻辑正常 | ✓（真机真框架协商拒绝） |
-| 所有失败项有复现步骤和日志摘要 | 无失败项 |
+| 所有失败项有复现步骤和日志摘要 | 无迁移回归失败项；两项已知现象有现象描述、A/B 对照与定性（§3.1/§3.2） |
 
 ## 偏差与说明
 
 1. **F06 N/A**：无老框架环境（非失败）。
 2. **`screenshot-noaudit install failed: NoSuchMethodError gc6.a#onActivityResumed`**：两进程各 1 条。`gc6.a` 为飞书 7.70 专有混淆名（源码注释明示「仅 7.70 定位」），8.1.12 下类不存在，try/catch 降级为日志——legacy 版本同版本 app 下同样失败，属基线既有行为，非迁移回归。
-3. **§3 行为层验证未在本记录内闭环**：按 08 前置条件由用户本人操作测试小号执行；本提交先落机器侧结果，行为矩阵执行后在本文件补录。
-4. **reload 触发方式**：采用同版本 `adb install -r` 走 LSPosed Auto hot reload 路径（无 root 注入、无管理器 UI 自动化）；未测试「LSPosed 管理器手动 reload」入口（如有），属等价触发面。
-5. ClassLoader identity（205258361/207587393）为进程内 identityHashCode，多次重启间出现同值属 ART 分配确定性，非固定 ID。
+3. **7.70 专有混淆名在 8.1.12 匹配 0 的还有两处**：`CopyActionAuditUtil(q)`（复制审计细粒度拦截）与 `y33.a`（审计服务访问器），与偏差 2 同类基线版本漂移；审计屏蔽的总闸双保险（`writeData` + `auditSecurityEvent`，稳定类名）不受影响、正常挂载。
+4. **保密模式转发未解锁**（§3.2 发现）：第二道策略门在模块与 legacy hook 面之外，行为等价；解锁属新功能决策留上游，不阻塞阶段出口。
+5. **reload 触发方式**：采用同版本 `adb install -r` 走 LSPosed Auto hot reload 路径（无 root 注入、无管理器 UI 自动化）；未测试「LSPosed 管理器手动 reload」入口（如有），属等价触发面。
+6. ClassLoader identity（205258361/207587393）为进程内 identityHashCode，多次重启间出现同值属 ART 分配确定性，非固定 ID。
 
 ## 下一步
 
-- 用户执行 §3 行为矩阵（测试小号）→ 结果补录本文件 → 阶段 7 关闭。
-- 阶段 8：上游 PR（[09-upstream-pr.md](../../09-upstream-pr.md)）。
+- 阶段 7 行为矩阵已全部执行完毕（§3.1 三轮 + §3.2 第二轮），**阶段 7 完成，待审计**（`d585f99` / `78a821f` / `89ed48e` / 本提交）。
+- 阶段 8：上游 PR（[09-upstream-pr.md](../../09-upstream-pr.md)）——PR 描述需包含测试矩阵、两项已知现象的定性、版本号暂不变更说明和已知限制。
