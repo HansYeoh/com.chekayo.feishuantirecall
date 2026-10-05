@@ -1,0 +1,10 @@
+# legacy 静态扫描 (07 §3)
+# 命令: rg -n --hidden --glob '!*.apk' --glob '!*.idsig' 'de\.robv|XposedBridge|XposedHelpers|XC_MethodHook|IXposedHook|xposed_init' app stubs build.ps1 build.sh scripts
+$ rg ... app stubs build.ps1 build.sh scripts
+rg exit=1 (1=无匹配=PASS)
+
+# 信息性全仓扫描(排除 docs/ 与 .git/, 文档命中不算残留):
+.\README.md
+.\防已读-复盘-从native碰墙到Java破局.md
+.\国际版与白标适配-复盘.md
+(以上 3 个均为文档类 .md, 非源码)

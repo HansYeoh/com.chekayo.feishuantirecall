@@ -1,0 +1,60 @@
+# native/config/data 冻结边界检查 (07 §4 + README §6) — 对比基线 main=544b593 (merge-base)
+
+## 1. native/jni diff（必须为空）
+→ 空 = 零改动 PASS
+
+## 2. app/src/main/assets diff（仅允许 xposed_init 删除 = 迁移本意）
+ app/src/main/assets/xposed_init | 4 ----
+ 1 file changed, 4 deletions(-)
+diff --git a/app/src/main/assets/xposed_init b/app/src/main/assets/xposed_init
+deleted file mode 100644
+index 36926e6..0000000
+--- a/app/src/main/assets/xposed_init
++++ /dev/null
+@@ -1,4 +0,0 @@
+-com.chekayo.feishuantirecall.AntiRecall
+-com.chekayo.larkresign.ResignTracker
+-com.chekayo.feishuantirecall.FuckLarkSettingsHook
+-com.chekayo.feishuantirecall.ProfileCapture
+
+## 3. version.json（必须不变）
+baseline blob: b7d6782847935a9dd0cc2cfb9442bfa8a2e891a7
+HEAD     blob: b7d6782847935a9dd0cc2cfb9442bfa8a2e891a7
+
+## 4. config/data 相关 java 文件 blob SHA（阶段0冻结清单）
+Config.java UNCHANGED 165f18ed6a759a861389755a095c6665798d4f5b
+ConfigProvider.java UNCHANGED e76838095f56508045f3441e9c71994df6c1a838
+AccountPaths.java UNCHANGED 90de95f83fc423e0650fc9cdbb908a3aa59bb21e
+NotifArchive.java CHANGED cb4b0a3bb1544863ecb7b57da1c0cf61aba77597 -> 4d28334734a1e06585ce4b1b03a9e1c3d3339666（见下述 diff 性质）
+ArchiveSync.java UNCHANGED 8fe30933df8c563b85a7b676f6bc63d42f2ee640
+ProfileBulk.java UNCHANGED 9ed4fa1819480f7f0cbab7fd3697c4645837ba6a
+
+## 5. NotifArchive.java 变更性质（唯一有变动的 config/data 邻接文件）
+diff --git a/app/src/main/java/com/chekayo/feishuantirecall/NotifArchive.java b/app/src/main/java/com/chekayo/feishuantirecall/NotifArchive.java
+index cb4b0a3..4d28334 100644
+--- a/app/src/main/java/com/chekayo/feishuantirecall/NotifArchive.java
++++ b/app/src/main/java/com/chekayo/feishuantirecall/NotifArchive.java
+@@ -57,7 +57,7 @@ public class NotifArchive {
+ 
+     public static void setFilesDir(File filesDir) {
+         if (filesDir == null) return;
+-        // 通知存档按登录账号隔离。setFilesDir 在 handleLoadPackage 早期执行, 可能早于 AccountPaths.bind,
++        // 通知存档按登录账号隔离。setFilesDir 在 install 分发早期执行, 可能早于 AccountPaths.bind,
+         // 此处自行探测 uid(无 Context 也走 /data/data/<pkg> 路径), 否则 FILE 会固定到 accounts/unknown/
+         // 而迁移/桌面推送在 accounts/<uid>/ —— 写读分离导致「后台消息存档失效」。
+         String uid = AccountPaths.currentUid;
+→ 仅 1 行注释术语更新（handleLoadPackage→install 分发, 阶段3生命周期命名）, 代码零变化
+
+## 6. AntiRecall 内置版本常量（README §1.2 要求不变）
+57:    static final String MODULE_VERSION = "1.8.9";
+58:    static final int MODULE_VERSION_CODE = 31;   // 与 AndroidManifest versionCode 同步; 更新检查比对用
+64:    static final String EXPECTED_SIG = "7c20f829bb61d2758f203130b6e3f5ef0d00141def1bd383c11efeeee23ac81d";
+--- 当前 ---
+55:    static final String MODULE_VERSION = "1.8.9";
+56:    static final int MODULE_VERSION_CODE = 31;   // 与 AndroidManifest versionCode 同步; 更新检查比对用
+62:    static final String EXPECTED_SIG = "7c20f829bb61d2758f203130b6e3f5ef0d00141def1bd383c11efeeee23ac81d";
+
+## 7. 构建脚本自身改动（迁移引入, 明细见 build-scripts-diff-vs-main.diff）
+ build.ps1 | 36 ++++++++++++++++++++++++++++++------
+ build.sh  | 31 ++++++++++++++++++++++++-------
+ 2 files changed, 54 insertions(+), 13 deletions(-)

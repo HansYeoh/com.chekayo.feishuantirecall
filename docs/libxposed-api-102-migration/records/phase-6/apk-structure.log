@@ -1,0 +1,57 @@
+# APK 结构检查 (07 §5) — unzip -l feishu-antirecall.apk
+必备条目: classes.dex / lib/arm64-v8a/libantirecall.so / libresign.so / META-INF/xposed/{java_init.list,module.prop,scope.list}
+必须不存在: assets/xposed_init
+
+Archive:  feishu-antirecall.apk
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+     3820  1980-01-01 00:00   AndroidManifest.xml
+  1050966  1980-01-01 00:00   res/drawable-nodpi-v4/module_logo.png
+      696  1980-01-01 00:00   res/xml/accessibility_service_config.xml
+     1568  1980-01-01 00:00   resources.arsc
+   322919  1980-01-01 00:00   assets/reward.png
+   247528  2026-10-06 00:17   classes.dex
+    53416  2026-10-06 00:17   lib/arm64-v8a/libantirecall.so
+    27496  2026-10-06 00:17   lib/arm64-v8a/libresign.so
+       45  2026-10-05 18:16   META-INF/xposed/java_init.list
+      319  2026-10-05 18:16   META-INF/xposed/module.prop
+       40  2026-10-05 18:16   META-INF/xposed/scope.list
+     1221  2026-10-06 00:17   META-INF/ANDROIDD.SF
+     1193  2026-10-06 00:17   META-INF/ANDROIDD.RSA
+     1094  2026-10-06 00:17   META-INF/MANIFEST.MF
+---------                     -------
+  1712321                     14 files
+
+# ===== 元数据内容 (07 §6, cat -A 显示行尾, $=LF 无CR) =====
+--- java_init.list ---
+com.chekayo.feishuantirecall.FeishuKitModule$
+--- module.prop ---
+id=com.chekayo.feishuantirecall$
+name=FeishuKit$
+version=1.8.9$
+versionCode=31$
+author=haikow$
+description=FeishuKitM-oM-<M-^ZM-iM-^XM-2M-fM-^RM-$M-eM-^[M-^^ / M-iM-^XM-2M-eM-7M-2M-hM-/M-; / M-gM-&M-;M-hM-^AM-^LM-fM-!M-#M-fM-!M-^HM-cM-^@M-^BM-hM-.M->M-gM-=M-.M-eM-^\M-(M-iM-#M-^^M-dM-9M-&M-cM-^@M-^LM-hM-.M->M-gM-=M-. M-bM-^FM-^R M-eM-.M-^^M-iM-*M-^LM-eM-.M-$M-cM-^@M-^MM-eM-^PM-^NM-gM-^ZM-^DM-cM-^@M-^LM-fM-(M-!M-eM-^]M-^WM-hM-.M->M-gM-=M-.M-cM-^@M-^M$
+minApiVersion=102$
+targetApiVersion=102$
+staticScope=true$
+exceptionMode=protective$
+autoHotReload=true$
+--- scope.list ---
+com.ss.android.lark$
+com.larksuite.suite$
+
+# ===== badging (版本号未动: versionCode=31 / versionName=1.8.9 / minSdk 29 / target 34) =====
+package: name='com.chekayo.feishuantirecall' versionCode='31' versionName='1.8.9' platformBuildVersionName='17' platformBuildVersionCode='37' compileSdkVersion='37' compileSdkVersionCodename='17'
+minSdkVersion:'29'
+targetSdkVersion:'34'
+application-label:'FeishuKit'
+native-code: 'arm64-v8a'
+
+# ===== 二进制 manifest uses-sdk =====
+      E: uses-sdk (line=7)
+        A: http://schemas.android.com/apk/res/android:minSdkVersion(0x0101020c)=29
+        A: http://schemas.android.com/apk/res/android:targetSdkVersion(0x01010270)=34
+
+# ===== 签名证书 (apksigner verify) =====
+V3.0 Signer: certificate SHA-256 digest: 7c20f829bb61d2758f203130b6e3f5ef0d00141def1bd383c11efeeee23ac81d
