@@ -16,8 +16,7 @@ import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
+import io.github.libxposed.api.XposedInterface;
 
 /**
  * 下载文件另存到系统「下载」—— 飞书下载的文件只落到应用私有/内部目录(文件管理器不可见、其它 App 打不开)。
@@ -53,26 +52,28 @@ public class DownloadMirror {
             Class<?> uih = ctx.getClassLoader().loadClass("com.ss.android.lark.utils.UIHelper");
             Method m = uih.getDeclaredMethod("mustacheFormat", int.class, String.class, String.class);
             final int wantId = ctx.getResources().getIdentifier(DL_TOAST_RES, "string", ctx.getPackageName());
-            XposedBridge.hookMethod(m, new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
-                    if (!Config.pubdownload) return;
-                    if (!"path".equals(p.args[1])) return;               // 只认 {{path}} 占位的串
-                    int resId = (Integer) p.args[0];
-                    if (!isDownloadToast(ctx, resId, wantId)) return;
-                    String path = (String) p.args[2];
-                    if (path == null) return;
+            HookRuntime.hook(m, "dlmirror.mustacheFormat", new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    // legacy: 命中下载 toast 时短路改写返回值(setResult), 未命中放行
+                    Object[] args = chain.getArgs().toArray();
+                    if (!Config.pubdownload) return chain.proceed(args);
+                    if (!"path".equals(args[1])) return chain.proceed(args);           // 只认 {{path}} 占位的串
+                    int resId = (Integer) args[0];
+                    if (!isDownloadToast(ctx, resId, wantId)) return chain.proceed(args);
+                    String path = (String) args[2];
+                    if (path == null) return chain.proceed(args);
                     File src = new File(path);
-                    if (!src.isFile() || src.length() == 0) return;
+                    if (!src.isFile() || src.length() == 0) return chain.proceed(args);
                     mirrorAsync(ctx, src);
                     // 改写 toast: 超长内部路径 -> 友好公共路径
                     String sub = Config.pubdownloadSubdir;
                     String rel = "Download" + (sub == null || sub.isEmpty() ? "" : "/" + sub);
-                    p.setResult("已保存到 " + rel + "/" + src.getName());
+                    return "已保存到 " + rel + "/" + src.getName();
                 }
             });
-            XposedBridge.log("[fucklark][dl] 下载完成 toast 已 hook (UIHelper.mustacheFormat, resId=" + wantId + ")");
+            ModuleLog.log("[fucklark][dl] 下载完成 toast 已 hook (UIHelper.mustacheFormat, resId=" + wantId + ")");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark][dl] toast hook install failed: " + t);
+            ModuleLog.log("[fucklark][dl] toast hook install failed: " + t);
         }
     }
 
@@ -86,7 +87,7 @@ public class DownloadMirror {
     static void startObserver(final Context ctx) {
         try {
             File ext = ctx.getExternalFilesDir(null);
-            if (ext == null) { XposedBridge.log("[fucklark][dl] getExternalFilesDir null, 跳过 observer"); return; }
+            if (ext == null) { ModuleLog.log("[fucklark][dl] getExternalFilesDir null, 跳过 observer"); return; }
             final File dir = new File(ext, "Lark/download");
             if (!dir.exists()) dir.mkdirs();
             observer = new FileObserver(dir.getAbsolutePath(), FileObserver.CLOSE_WRITE) {
@@ -100,9 +101,9 @@ public class DownloadMirror {
                 }
             };
             observer.startWatching();
-            XposedBridge.log("[fucklark][dl] 下载另存 已监听: " + dir.getAbsolutePath());
+            ModuleLog.log("[fucklark][dl] 下载另存 已监听: " + dir.getAbsolutePath());
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark][dl] observer install failed: " + t);
+            ModuleLog.log("[fucklark][dl] observer install failed: " + t);
         }
     }
 
@@ -114,9 +115,9 @@ public class DownloadMirror {
             @Override public void run() {
                 try {
                     copyToPublicDownload(ctx.getContentResolver(), src, name);
-                    XposedBridge.log("[fucklark][dl] 已另存到系统下载: " + name);
+                    ModuleLog.log("[fucklark][dl] 已另存到系统下载: " + name);
                 } catch (Throwable t) {
-                    XposedBridge.log("[fucklark][dl] 另存失败(" + name + "): " + t);
+                    ModuleLog.log("[fucklark][dl] 另存失败(" + name + "): " + t);
                 }
             }
         }, "fucklark-dl-mirror").start();

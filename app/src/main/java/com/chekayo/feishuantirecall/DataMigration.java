@@ -29,8 +29,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
+import io.github.libxposed.api.XposedInterface;
 
 /** Exports and restores module-owned configuration and persistent archives through Android SAF. */
 public final class DataMigration {
@@ -47,22 +46,27 @@ public final class DataMigration {
         if (installed) return;
         installed = true;
         try {
-            XposedBridge.hookAllMethods(Activity.class, "onActivityResult", new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam p) {
-                    int request = (Integer) p.args[0];
-                    if ((request != REQ_EXPORT && request != REQ_IMPORT) || request != pendingRequest) return;
+            HookRuntime.hookAllMethods(Activity.class, "onActivityResult", "migration.onActivityResult",
+                    new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    // legacy after-hook：原方法先执行，分发失败不影响原返回值
+                    Object result = chain.proceed();
+                    Object[] args = chain.getArgs().toArray();
+                    int request = (Integer) args[0];
+                    if ((request != REQ_EXPORT && request != REQ_IMPORT) || request != pendingRequest) return result;
                     pendingRequest = 0;
-                    int result = (Integer) p.args[1];
-                    Intent data = (Intent) p.args[2];
-                    if (result != Activity.RESULT_OK || data == null || data.getData() == null) return;
-                    Activity activity = (Activity) p.thisObject;
+                    int resultCode = (Integer) args[1];
+                    Intent data = (Intent) args[2];
+                    if (resultCode != Activity.RESULT_OK || data == null || data.getData() == null) return result;
+                    Activity activity = (Activity) chain.getThisObject();
                     if (request == REQ_EXPORT) exportAsync(activity, data.getData());
                     else importAsync(activity, data.getData());
+                    return result;
                 }
             });
         } catch (Throwable t) {
             installed = false;
-            XposedBridge.log("[fucklark] migration result hook failed: " + t);
+            ModuleLog.log("[fucklark] migration result hook failed: " + t);
         }
     }
 
@@ -118,7 +122,7 @@ public final class DataMigration {
                     } finally { zip.close(); }
                     done(activity, "备份完成，共 " + files.size() + " 个数据文件");
                 } catch (Throwable t) {
-                    XposedBridge.log("[fucklark] export backup failed: " + t);
+                    ModuleLog.log("[fucklark] export backup failed: " + t);
                     done(activity, "备份失败: " + safeMessage(t));
                 }
             }
@@ -149,7 +153,7 @@ public final class DataMigration {
                     Config.load();
                     done(activity, "恢复完成，共 " + restored + " 个数据文件；建议重启飞书");
                 } catch (Throwable t) {
-                    XposedBridge.log("[fucklark] import backup failed: " + t);
+                    ModuleLog.log("[fucklark] import backup failed: " + t);
                     done(activity, "恢复失败，未通过校验: " + safeMessage(t));
                 } finally { deleteTree(stage); }
             }

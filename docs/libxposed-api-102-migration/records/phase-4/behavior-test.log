@@ -1,0 +1,28 @@
+== é˜¶æ®µ4 hook è¿ç§»è¡Œä¸ºéªŒè¯ï¼ˆå®¿ä¸» JVMï¼‰ ==
+android.jar = C:/Users/Weirdo/AppData/Local/Android/Sdk/platforms/android-37.0/android.jar
+javac OKï¼ˆæ—  stubsï¼‰
+[PASS] ModuleRuntime.bind(Î±ÔìÄ£¿é)
+[PASS] ä¯ÀÀÂ·¾¶£º¹¹ÔìÆ÷ÈÔÖ´ÐÐÒ»´Î£¨proceed£©
+[PASS] ä¯ÀÀÂ·¾¶£ºmessage_ids ÒÑÇå¿Õ£¨proceed ÊÕµ½¿Õ±í£©
+[PASS] ä¯ÀÀÂ·¾¶£ºfold_ids ÒÑÇå¿Õ
+[PASS] ä¯ÀÀÂ·¾¶£ºÔ­ message_ids °´»á»°ÔÝ´æ£¨123456789£©
+[PASS] ä¯ÀÀÂ·¾¶£ºµ÷ÓÃ·½Ô­ List ²»±»Ô­µØÇå¿Õ£¨modern ×ß¸±±¾¸Ä²Î£©
+[PASS] SendReqHook£ºÀ¹½Ø·¢ËÍÇëÇó¹¹Ôìºó READ_WINDOW ÒÑ¿ª´°
+[PASS] SendReqHook£º¹¹ÔìÆ÷ÈÔÖ´ÐÐÒ»´Î
+[PASS] »Ø¸´´°¿Ú£ºÔÝ´æ ids(a,b) Óë±¾´Î(c) ºÏ²¢»ØÌî
+[PASS] »Ø¸´´°¿Ú£ºfold_ids ²»¶¯£¨½öä¯ÀÀÂ·¾¶Çå¿Õ£©
+[PASS] »Ø¸´´°¿Ú£ºÔÝ´æ±í¸Ã»á»°ÌõÄ¿ÒÑÏû·Ñ£¨remove£©
+[PASS] ¿ª¹Ø¹Ø£ºmessage_ids/fold_ids Ô­ÑùÍ¸´«¸ø proceed
+[PASS] ¶Ì²ÎÊý(<8)¹¹Ôì£º²»Å×Òì³£¡¢Ô­²Î·ÅÐÐ
+[PASS] InvokeHook(1021)£ºÔ­µ÷ÓÃÖ´ÐÐÇÒ·µ»ØÖµÍ¸´«£¨²»¶ÌÂ·£©
+[PASS] InvokeHook(10000 ÔëÒô)£ºÈÔ·ÅÐÐÔ­µ÷ÓÃ
+[PASS] MapperHook£ºÓÐÎÄ±¾ -> Èë»º´æÇÒÔ­·½·¨Ö´ÐÐ
+[PASS] MapperHook£º¿ÕÎÄ±¾ -> »ØÌî»º´æÄÚÈÝ + setStatus(NORMAL)
+[PASS] MapperHook£ºÔ­·½·¨ÈÔÖ´ÐÐ
+[PASS] FALSE_GATE ¿ª¹Ø¿ª£º·µ»Ø false ÇÒ²»Ö´ÐÐÔ­·½·¨£¨setResult(false) µÈ¼Û£©
+[PASS] VOID_GATE_RESTRICT ¿ª¹Ø¿ª£º·µ»Ø null ÇÒ²»Ö´ÐÐÔ­·½·¨£¨setResult(null) µÈ¼Û£©
+[PASS] FALSE_GATE ¿ª¹Ø¹Ø£ºproceed ·ÅÐÐÇÒ·µ»ØÖµÍ¸´«
+[PASS] VOID_GATE_NOAUDIT ¿ª¹Ø¿ª£ºÉó¼ÆÉÏ±¨¶ÌÂ·
+[PASS] HookRuntime.hookMethod Ê×´Î°²×°
+[PASS] Í¬ logicalId ¶þ´Î°²×°ÃÝµÈ£¨0 ÐÂ¿ò¼Ü°²×°£©
+== PASS£ºÈ«²¿ hook Ç¨ÒÆÐÐÎª¶ÏÑÔÍ¨¹ý ==

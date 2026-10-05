@@ -5,7 +5,7 @@ import android.util.Log;
 import io.github.libxposed.api.XposedInterface;
 
 /**
- * 统一日志入口：替代 {@code XposedBridge.log(String)}（现存 122 处，阶段 4 逐文件切换）。
+ * 统一日志入口：替代 legacy 日志通道（122 处已于阶段 4 全部切换）。
  *
  * 约束：
  * - 日志正文与 legacy 完全一致，便于新旧日志对照；
@@ -21,7 +21,7 @@ public final class ModuleLog {
 
     private ModuleLog() {}
 
-    /** 等价 legacy XposedBridge.log(message)。 */
+    /** 等价 legacy 日志(message)。 */
     public static void log(String message) {
         log(Log.INFO, message, null);
     }

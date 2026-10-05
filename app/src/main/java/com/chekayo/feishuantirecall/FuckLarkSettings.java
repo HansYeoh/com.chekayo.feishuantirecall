@@ -9,9 +9,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.libxposed.api.XposedInterface;
 
 /**
  * FeishuKit 设置页卡片：在飞书「设置」页注入独立卡片，仅显示「模块设置」。
@@ -57,39 +55,47 @@ public class FuckLarkSettings {
     /** 多目标 hook：任一设置页类存在即挂 onResume，保证有「模块设置」入口。 */
     static void hookSettingPages(ClassLoader cl) {
         boolean any = false;
+        int cand = 0;
         for (String name : SETTING_HOOK_TARGETS) {
             try {
-                XposedHelpers.findAndHookMethod(name, cl, "onResume",
-                    new XC_MethodHook() {
-                        @Override protected void afterHookedMethod(MethodHookParam param) {
-                            try { inject(param.thisObject); }
-                            catch (Throwable t) { XposedBridge.log("[fucklark] inject err " + t); }
+                HookRuntime.findAndHookMethod(name, cl, "onResume", new Class<?>[0],
+                        "fucklarksettings.settingpage#" + cand++,
+                    new XposedInterface.Hooker() {
+                        @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                            Object result = chain.proceed();
+                            try { inject(chain.getThisObject()); }
+                            catch (Throwable t) { ModuleLog.log("[fucklark] inject err " + t); }
+                            return result;
                         }
                     });
-                XposedBridge.log("[fucklark] 已 hook 设置页 " + name);
+                ModuleLog.log("[fucklark] 已 hook 设置页 " + name);
                 any = true;
             } catch (Throwable ignored) { /* 该版本类名不存在，试下一个 */ }
         }
         if (!any) {
             try {
-                XposedHelpers.findAndHookMethod(android.app.Activity.class, "onResume", new XC_MethodHook() {
-                    @Override protected void afterHookedMethod(MethodHookParam param) {
-                        try {
-                            android.app.Activity a = (android.app.Activity) param.thisObject;
-                            String n = a.getClass().getName();
-                            if (n.contains("setting") || n.contains("Setting")) injectActivity(a);
-                        } catch (Throwable ignored) {}
-                    }
-                });
-                XposedBridge.log("[fucklark] 设置页类未命中，已 hook Activity.onResume 兜底");
+                HookRuntime.hookMethod(android.app.Activity.class, "onResume", new Class<?>[0],
+                        "fucklarksettings.activity.onResume",
+                    new XposedInterface.Hooker() {
+                        @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                            Object result = chain.proceed();
+                            try {
+                                android.app.Activity a = (android.app.Activity) chain.getThisObject();
+                                String n = a.getClass().getName();
+                                if (n.contains("setting") || n.contains("Setting")) injectActivity(a);
+                            } catch (Throwable ignored) {}
+                            return result;
+                        }
+                    });
+                ModuleLog.log("[fucklark] 设置页类未命中，已 hook Activity.onResume 兜底");
             } catch (Throwable t) {
-                XposedBridge.log("[fucklark] hook 设置入口失败 " + t);
+                ModuleLog.log("[fucklark] hook 设置入口失败 " + t);
             }
         }
     }
 
     static void inject(Object fragment) {
-        Object v = XposedHelpers.callMethod(fragment, "getView");
+        Object v = Reflect.callMethod(fragment, "getView");
         if (!(v instanceof View)) return;
         injectIntoRoot((View) v);
     }
@@ -131,14 +137,14 @@ public class FuckLarkSettings {
         int at = findInsertIndex(parent);
         try {
             parent.addView(card, Math.min(at, parent.getChildCount()));
-            XposedBridge.log("[fucklark] 高级设置卡片已注入 parent=" + parent.getClass().getSimpleName()
+            ModuleLog.log("[fucklark] 高级设置卡片已注入 parent=" + parent.getClass().getSimpleName()
                     + " index=" + at + "/" + parent.getChildCount());
         } catch (Throwable t) {
             try {
                 parent.addView(card);
-                XposedBridge.log("[fucklark] 高级设置卡片追加到末尾 parent=" + parent.getClass().getSimpleName());
+                ModuleLog.log("[fucklark] 高级设置卡片追加到末尾 parent=" + parent.getClass().getSimpleName());
             } catch (Throwable t2) {
-                XposedBridge.log("[fucklark] 高级设置卡片注入失败 " + t2);
+                ModuleLog.log("[fucklark] 高级设置卡片注入失败 " + t2);
             }
         }
     }
@@ -320,7 +326,7 @@ public class FuckLarkSettings {
         try {
             View dest = newInstance(ctx, src.getClass());
             if (dest == null) {
-                XposedBridge.log("[fucklark] clone: new instance failed " + src.getClass().getName());
+                ModuleLog.log("[fucklark] clone: new instance failed " + src.getClass().getName());
                 return null;
             }
             copyViewBase(src, dest);
@@ -329,13 +335,13 @@ public class FuckLarkSettings {
             }
             // 改标题为「模块设置」（替换克隆中仍是锚点的文案）
             if (!applyRowText(dest, ROW_TEXT)) {
-                XposedBridge.log("[fucklark] clone: applyRowText failed, fallback");
+                ModuleLog.log("[fucklark] clone: applyRowText failed, fallback");
                 return null;
             }
-            XposedBridge.log("[fucklark] clone ok " + dest.getClass().getSimpleName());
+            ModuleLog.log("[fucklark] clone ok " + dest.getClass().getSimpleName());
             return dest;
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] cloneNativeSettingItem err " + t);
+            ModuleLog.log("[fucklark] cloneNativeSettingItem err " + t);
             return null;
         }
     }
@@ -457,7 +463,7 @@ public class FuckLarkSettings {
         String[] methods = { "setLeftText", "setTitle", "setText", "setMainText", "setLabel" };
         for (String m : methods) {
             try {
-                de.robv.android.xposed.XposedHelpers.callMethod(row, m, text);
+                Reflect.callMethod(row, m, text);
                 return true;
             } catch (Throwable ignored) { }
         }
@@ -519,7 +525,7 @@ public class FuckLarkSettings {
                 hops++;
             }
             if (item != null) {
-                XposedBridge.log("[fucklark] 锚点 " + label + " -> " + item.getClass().getSimpleName());
+                ModuleLog.log("[fucklark] 锚点 " + label + " -> " + item.getClass().getSimpleName());
                 return item;
             }
             if (tv.getParent() instanceof View) return (View) tv.getParent();
@@ -605,7 +611,7 @@ public class FuckLarkSettings {
         if (lab != null && icon != null && rowW > 0) {
             t.padR = Math.max(t.padR, rowW - icon.getRight());
         }
-        XposedBridge.log("[fucklark] RowTemplate pad=" + t.padL + "," + t.padT + "," + t.padR + "," + t.padB
+        ModuleLog.log("[fucklark] RowTemplate pad=" + t.padL + "," + t.padT + "," + t.padR + "," + t.padB
                 + " row=" + rowW + "x" + rowH + " textSizePx=" + t.textSize + " icon=" + t.iconW + "x" + t.iconH
                 + " iconD=" + (t.icon != null));
         return t;

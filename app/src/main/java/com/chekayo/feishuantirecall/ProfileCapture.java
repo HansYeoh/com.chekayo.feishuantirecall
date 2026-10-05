@@ -21,9 +21,7 @@ import java.util.Set;
 
 import org.json.JSONObject;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.libxposed.api.XposedInterface;
 
 /**
  * FeishuKit「开资料页即归档」——V3 资料页是 section 分块渲染, 数据不走 entity.Profile,
@@ -67,21 +65,24 @@ public class ProfileCapture {
         try { AccountPaths.bind(null, PKG); } catch (Throwable ignored) {}
         OUT = AccountPaths.accountFile(null, PKG, AccountPaths.currentUid, "resign_tracker/profiles.json");
         try {
-            XposedHelpers.findAndHookMethod(ACT, classLoader, "onCreate", Bundle.class, new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam param) {
-                    final Activity act = (Activity) param.thisObject;
+            HookRuntime.findAndHookMethod(ACT, classLoader, "onCreate", new Class<?>[]{Bundle.class},
+                    "profilecapture.onCreate", new XposedInterface.Hooker() {
+                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                    Object result = chain.proceed();
+                    final Activity act = (Activity) chain.getThisObject();
                     // section 数据异步加载, 排几次延时抓取(幂等, 只在抓到字段时存)
                     Handler h = new Handler(Looper.getMainLooper());
                     for (long d : new long[]{1500, 3000, 5000, 8000}) {
                         h.postDelayed(new Runnable() {
-                            @Override public void run() { try { scrape(act); } catch (Throwable t) { XposedBridge.log("[fucklark] scrape err " + t); } }
+                            @Override public void run() { try { scrape(act); } catch (Throwable t) { ModuleLog.log("[fucklark] scrape err " + t); } }
                         }, d);
                     }
+                    return result;
                 }
             });
-            XposedBridge.log("[fucklark] ProfileCapture hooked UserProfileActivityV3.onCreate");
+            ModuleLog.log("[fucklark] ProfileCapture hooked UserProfileActivityV3.onCreate");
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] ProfileCapture hook 失败 " + t);
+            ModuleLog.log("[fucklark] ProfileCapture hook 失败 " + t);
         }
     }
 
@@ -160,12 +161,12 @@ public class ProfileCapture {
                 total = all.length();
             }
             ArchiveSync.pushProfiles();
-            XposedBridge.log("[fucklark] 归档资料 " + name + " uid=" + uid
+            ModuleLog.log("[fucklark] 归档资料 " + name + " uid=" + uid
                     + " 部门=" + rec.optString("department") + " 邮箱=" + rec.optString("email")
                     + " 职务=" + rec.optString("position") + " 上级=" + rec.optString("leader")
                     + " 累计=" + total);
         } catch (Throwable t) {
-            XposedBridge.log("[fucklark] 归档失败 " + t);
+            ModuleLog.log("[fucklark] 归档失败 " + t);
         }
     }
 
