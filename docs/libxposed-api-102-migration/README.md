@@ -3,7 +3,7 @@
 - **项目**：FeishuKit / `com.chekayo.feishuantirecall`
 - **目标**：从 legacy Xposed API 迁移到 libxposed API 102
 - **文档日期**：2026-10-05
-- **当前状态**：阶段 0~6 已完成且审计通过；**阶段 7 真机回归完成，待审计**（见 `records/phase-7/`：机器侧 LSPosed v2.2.1 真实加载 API 102、3 次重启零重复零崩溃、进程覆盖、native 双 so+sqlite hook+maintain 线程、hot reload 真机协商拒绝；行为矩阵两轮全部执行完毕——防已读含基线对照三轮、保密模式转发/回复窗口载体两项已知现象均定性为与 legacy 等价的基线行为非迁移回归，全程零 FATAL）；下一阶段：阶段 8 上游 PR（09-upstream-pr.md）
+- **当前状态**：阶段 0~7 已完成且审计通过（阶段 7 见 `records/phase-7/`：LSPosed v2.2.1 真机真实加载 API 102 modern 模块，机器侧＋两轮行为矩阵全部通过，hot reload 真机协商拒绝；两项已知现象定性为与 legacy 等价的基线行为；审计方登记非阻塞风险：native so 可写路径加载的 Android 未来版本兼容性，需在阶段 8 PR 说明或独立议题跟进）；下一阶段：阶段 8 上游 PR（09-upstream-pr.md）
 - **适用分支**：从当前 `main` 分支创建迁移分支
 
 ## 1. 目标与边界
