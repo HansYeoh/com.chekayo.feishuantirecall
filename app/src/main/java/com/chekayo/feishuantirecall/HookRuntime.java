@@ -24,7 +24,7 @@ import io.github.libxposed.api.XposedInterface;
  *   同一 Executable 重复安装不报错、只告警并返回既有记录；同键不同 Executable
  *   视为 ID 配置冲突，抛 IllegalStateException 报出来（审计 F5）；
  * - 每个 handle 连同元数据登记在 REGISTRY，供卸载 / 同 ID 原子替换 / reload 诊断 / 测试期查重；
- *   首次安装即在安装锁内登记不可热重载（HotReloadSafety.markJavaHook，审计 F2）；
+ *   首次安装即在安装锁内向 HotReloadSafety 登记诊断标记（markJavaHook）；
  * - 异常模式不在 per-hook 覆盖，跟随 module.prop 的 exceptionMode=protective 单一来源。
  */
 public final class HookRuntime {
@@ -33,13 +33,6 @@ public final class HookRuntime {
     private static final Object INSTALL_LOCK = new Object();
 
     private HookRuntime() {}
-
-    /**
-     * 安装互斥锁：hot reload 门控判定（FeishuKitModule.onHotReloading）必须先持有它再取
-     * 安全快照，使「判定」与「安装」串行化（审计 F2）。锁序恒为 installLock → HotReloadSafety
-     * 的内部锁，不存在反向获取路径。
-     */
-    static Object installLock() { return INSTALL_LOCK; }
 
     /** 一条已安装 hook 的统一登记记录。 */
     public static final class InstalledHook {
@@ -142,9 +135,10 @@ public final class HookRuntime {
                         + " -> " + prev.getSignature());
                 return prev;
             }
-            // 本代装过任何 Java hook 即登记不可热重载（审计 F2）：登记发生在安装锁内、
-            // hook 对框架可见之前，与 onHotReloading 的门控判定互斥，启动窗口内不可能
-            // 「查完干净 -> 并发装 hook -> 仍放行」。
+            // 诊断登记（06 文档 §3 状态表）：本代装过任何 Java hook。登记发生在安装锁内、
+            // hook 对框架可见之前，保证「查表者看到的登记」与「hook 的存在」时序一致
+            // （onHotReloading 自 2026-10 审计 F2 第二轮起无条件拒绝，本登记供 reload
+            // 诊断与未来「旧代退役」实现使用）。
             HotReloadSafety.markJavaHook("installed-java-hooks");
             XposedInterface.HookHandle api = module.hook(target)
                     .setId(key)

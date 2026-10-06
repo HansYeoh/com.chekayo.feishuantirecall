@@ -15,9 +15,10 @@ import java.util.concurrent.CountDownLatch;
 
 /**
  * 阶段 5 行为验证：hot reload 安全门控 + 新一代入口接线（宿主 JVM 直跑，06 文档）。
- * 覆盖：§2 四类资源门控（native/线程/外部回调/已装 Java hook 任一存在即拒绝，全干净才放行；
- * 第四类为 2026-10 审计 F2 修复——启动窗口内「已装 hook、配置桥接收器未注册」曾被误判干净）、
- * §3 状态表语义（闩幂等、延时任务计数到 0 归零、重复 end 不为负）、
+ * 覆盖：§2 四类资源状态表（native/线程/外部回调/已装 Java hook 的登记语义——2026-10
+ * 审计 F2 第二轮起 onHotReloading 无条件拒绝：放行是点时决策，无法与并发分发关闭竞争
+ * 窗口，也没有「返回 true 后旧代停止安装」的退役状态；状态表保留作拒绝日志的 describe
+ * 诊断与并发回归）、§3 状态表语义（闩幂等、延时任务计数到 0 归零、重复 end 不为负）、
  * §4 新一代入口（bind 接线 + 旧 handle 全量 unhook + ModulePath 补路径 + 不做业务分发）、
  * bind 失败 fail-closed（仅清旧 handle）、reload 后新加载的包照常完整分发。
  * 产物不进 APK、不依赖真机；真机 reload 协商回归按计划属阶段 7。
@@ -167,15 +168,14 @@ public class HotReloadBehaviorTest {
         check(!HotReloadSafety.hasJavaHooks(), "干净进程无 Java hook 登记");
         check("(clean)".equals(HotReloadSafety.describe()), "describe 干净态 = (clean)");
 
-        // ── 2. 放行路径：门控全空 → true + classloader-neutral 门控结论（06 文档 §2） ──
+        // ── 2. 统一拒绝（2026-10 审计 F2 第二轮：资源全空也无条件 fail-closed） ──
         FeishuKitModule m1 = newModule();
         m1.onModuleLoaded(new FakeModuleLoadedParam());
         String gen1 = ModuleRuntime.getGenerationId();
-        RecordingReloadingParam accept = new RecordingReloadingParam();
-        check(m1.onHotReloading(accept) == true, "无 teardown-unsafe 资源时 onHotReloading 返回 true");
-        check("feishukit:generation-clean".equals(accept.saved) && accept.setCount == 1,
-                "放行时向新一代传门控结论（且只传一次）");
-        check(logCount("hot reload accepted") == 1, "放行已记日志");
+        RecordingReloadingParam clean = new RecordingReloadingParam();
+        check(m1.onHotReloading(clean) == false, "四类资源全空时 onHotReloading 也无条件拒绝");
+        check(clean.saved == null && clean.setCount == 0, "拒绝时不向新一代传任何状态");
+        check(logCount("hot reload rejected") == 1, "统一拒绝已记日志（含诊断 describe）");
 
         // ── 3. native hook 登记 → 拒绝（06 文档 §2 门控一） ──
         HotReloadSafety.markNativeHook("antirecall.native-inline");
@@ -184,7 +184,7 @@ public class HotReloadBehaviorTest {
         RecordingReloadingParam rejectN = new RecordingReloadingParam();
         check(m1.onHotReloading(rejectN) == false, "存在 native hook 时拒绝 reload");
         check(rejectN.saved == null && rejectN.setCount == 0, "拒绝时不向新一代传任何状态");
-        check(logCount("hot reload rejected") == 1 && logCount("antirecall.native-inline") >= 1,
+        check(logCount("hot reload rejected") == 2 && logCount("antirecall.native-inline") >= 1,
                 "拒绝日志带 describe 资源清单");
 
         // ── 4. 线程登记 → 拒绝（06 文档 §2 门控二） ──
@@ -222,7 +222,8 @@ public class HotReloadBehaviorTest {
         HotReloadSafety.endDelayedTask("profilecapture.scrape-delayed");   // 多余的 end
         check(!HotReloadSafety.hasModuleThreads() && "(clean)".equals(HotReloadSafety.describe()),
                 "计数归零后回到干净态（多余 end 不产生负数）");
-        check(m1.onHotReloading(new RecordingReloadingParam()) == true, "延时任务全部结束后重新放行");
+        check(m1.onHotReloading(new RecordingReloadingParam()) == false,
+                "延时任务全部结束（状态表干净）后仍统一拒绝（表只作诊断）");
 
         // ── 8. 三类并存：拒绝一次列全，重复拒绝稳定不崩溃 ──
         HotReloadSafety.markNativeHook("resigntracker.native-inline");
@@ -342,9 +343,9 @@ public class HotReloadBehaviorTest {
         check(HotReloadSafety.inspectReloadSafety().isClean()
                 && "(clean)".equals(HotReloadSafety.describe()),
                 "写线程结束后延时任务计数归零、回到干净态");
-        check(accepts + rejects == 8
+        check(accepts == 0 && rejects == 8
                 && logCount("hot reload rejected") - rejectLogBefore == rejects,
-                "并发下入口门控 8 次决策稳定且拒绝必记日志（accepts=" + accepts + " rejects=" + rejects + "）");
+                "并发下入口 8 次决策全部统一拒绝且每次记日志（accepts=" + accepts + " rejects=" + rejects + "）");
         // 发布屏障：登记线程完成后，后续任意次判定都不得漏检该资源（闩语义）
         final CountDownLatch published = new CountDownLatch(1);
         new Thread(new Runnable() {
@@ -361,13 +362,15 @@ public class HotReloadBehaviorTest {
         }
         check(misses == 0, "已发布的外部回调登记在 500 次判定中零漏检");
         HotReloadSafety.resetForTest();
-        check(HotReloadSafety.inspectReloadSafety().isClean()
-                && m2.onHotReloading(new RecordingReloadingParam()) == true,
-                "清理后门控恢复放行");
+        check(HotReloadSafety.inspectReloadSafety().isClean(),
+                "写线程结束后延时任务计数归零、回到干净态");
+        check(m2.onHotReloading(new RecordingReloadingParam()) == false,
+                "状态表清空后统一拒绝保持不变（无条件 fail-closed）");
 
-        // ── 15. 审计 F2（2026-10）：本代装过 Java hook / 已开始分发即拒绝（启动窗口竞态关闭） ──
-        // 审计夹具场景：真实分发完成（Java hook 已在册）、配置桥接收器尚未注册、native/线程
-        // 也未启动——原三类门控在此刻误判「干净」放行，框架卸掉旧 hook 后新代不重分发。
+        // ── 15. 审计 F2（2026-10，第二轮收紧后复验）：统一拒绝覆盖启动窗口全部形态 ──
+        // 第一版四类门控放行「干净」进程存在不可关闭的竞争窗口（放行是点时决策：快照
+        // 成立后并发分发线程仍可继续装 hook，且没有「返回 true 后旧代停止安装」的退役
+        // 状态，复审并发夹具稳定复现），第二轮起无条件拒绝。本节回归三种形态都拒绝。
         resetRuntimeForNewGeneration();
         FeishuKitModule m4 = new FeishuKitModule();
         HookingXposed hx = new HookingXposed();
@@ -378,13 +381,12 @@ public class HotReloadBehaviorTest {
                 "真实分发已装 Java hook（installed=" + hx.installed + "）");
         check(HotReloadSafety.hasJavaHooks() && !HotReloadSafety.hasNativeHooks()
                 && !HotReloadSafety.hasModuleThreads() && !HotReloadSafety.hasExternalCallbacks(),
-                "启动窗口复刻：仅 java-hooks 类登记，其余三类全空");
+                "启动窗口形态：仅 java-hooks 类登记，其余三类全空");
         check(HotReloadSafety.describe().contains("java-hooks=["),
                 "describe 列出 java-hooks 分组: " + HotReloadSafety.describe());
         check(m4.onHotReloading(new RecordingReloadingParam()) == false,
-                "已装 Java hook 的进程请求 reload 拒绝（审计 F2）");
-        // 分发即登记的另一面：即使全部 hook 安装都失败（这里 hook() 直接抛异常），
-        // 「分发开始」事实已登记，同样拒绝——fail-closed。
+                "已装 Java hook 的进程请求 reload 拒绝");
+        // 分发开始但零 hook 安装成功（hook() 直接抛异常）：同样拒绝。
         HotReloadSafety.resetForTest();
         resetRuntimeForNewGeneration();
         FeishuKitModule m5 = new FeishuKitModule();
@@ -394,10 +396,10 @@ public class HotReloadBehaviorTest {
         check(HotReloadSafety.hasJavaHooks(),
                 "分发开始但零 hook 安装成功：dispatch-begun 登记仍在");
         check(m5.onHotReloading(new RecordingReloadingParam()) == false,
-                "分发开始过但零 hook 的进程同样拒绝 reload（fail-closed）");
+                "分发开始过但零 hook 的进程同样拒绝 reload");
         HotReloadSafety.resetForTest();
-        check(m5.onHotReloading(new RecordingReloadingParam()) == true,
-                "清空登记（模拟换代）后恢复放行");
+        check(m5.onHotReloading(new RecordingReloadingParam()) == false,
+                "状态表清空（模拟换代）后仍无条件拒绝");
 
         System.out.println(failures == 0
                 ? "== PASS：全部 hot reload 安全门控断言通过 =="

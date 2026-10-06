@@ -10,14 +10,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  * hot reload 安全门控的资源状态表（06 文档 §3）。每个模块代一份：hot reload 新一代
  * 由新 ClassLoader 加载，static 状态天然按代隔离，新一代从空表起步，不存在跨代共享。
  *
- * 只做登记、不改变任何业务行为：各资源创建点在资源「已创建且无 teardown 能力」时打标，
- * 唯一的消费方是 {@link FeishuKitModule} 的 onHotReloading 门控 —— 存在任一 native inline
- * hook / 模块自有线程 / 外部回调 / 已安装的 Java hook 即拒绝 reload（06 文档 §2 第一版策略：
- * module.prop 声明 autoHotReload=true 但安全拒绝优先，避免旧代资源与新代代码叠加运行）。
- * 第四类（审计修复）：Java hook 本身虽可被框架卸载，但 onHotReloaded 不会对已分发的包重新
- * 执行分发——启动窗口内「已装 hook、配置桥接收器尚未注册」的进程曾被误判为干净而放行，
- * reload 卸掉旧 hook 后功能静默丢失直到进程重启；故本代装过任何 Java hook / 已开始业务
- * 分发即视为不可热重载（登记与安装经 HookRuntime 的安装锁互斥，见门控判定）。
+ * 只做登记、不改变任何业务行为：各资源创建点在资源「已创建且无 teardown 能力」时打标。
+ * 消费方（2026-10 审计 F2 第二轮起）：FeishuKitModule.onHotReloading 已无条件拒绝 reload
+ * （放行是点时决策，无法与并发分发关闭竞争窗口，且没有旧代退役状态），本表不再参与
+ * 放行判定，保留作 reload 诊断——拒绝日志附 {@link #describe()} 资源清单，也是未来实现
+ * 「旧代退役 + 新代接管」时的资源盘点输入。第一版按表门控的设计与两轮收紧过程见
+ * records/audit-fixes/audit-fixes-record.md。
  *
  * 门控判定必须走 {@link #inspectReloadSafety()}：三类资源与原因文本在同一次加锁内生成
  * 不可变 {@link GateSnapshot}，「查完一类到返回」之间不存在被并发打标穿越的窗口
@@ -53,9 +51,9 @@ public final class HotReloadSafety {
     public static void markExternalCallback(String name) { latch(name, Kind.EXTERNAL_CALLBACK); }
 
     /**
-     * 本代已装 Java hook / 已开始业务分发（审计 F2 修复）。Java hook 卸载后 onHotReloaded
-     * 不会对已分发的包重新分发，故登记即拒绝 reload；HookRuntime.hook 在安装锁内、任何
-     * hook 可见之前调用，FeishuKitModule.onPackageReady 在分发开始时调用。
+     * 本代已装 Java hook / 已开始业务分发（诊断登记，审计 F2 引入的第四类）。
+     * HookRuntime.hook 在安装锁内、任何 hook 对框架可见之前调用本方法；
+     * FeishuKitModule.onPackageReady 在业务分发开始时调用。
      */
     public static void markJavaHook(String name) { latch(name, Kind.JAVA_HOOK); }
 
@@ -93,14 +91,14 @@ public final class HotReloadSafety {
     /** 是否存在已注册的外部回调（06 文档 §2 门控三）。仅诊断/测试用，门控判定走 {@link #inspectReloadSafety()}。 */
     public static boolean hasExternalCallbacks() { return hasKind(Kind.EXTERNAL_CALLBACK); }
 
-    /** 是否已装 Java hook / 已开始业务分发（审计 F2 门控四）。仅诊断/测试用，门控判定走 {@link #inspectReloadSafety()}。 */
+    /** 是否已装 Java hook / 已开始业务分发（审计 F2 引入的第四类）。仅诊断/测试用。 */
     public static boolean hasJavaHooks() { return hasKind(Kind.JAVA_HOOK); }
 
     /**
-     * 一次性完整门控判定（06 文档 §2 的唯一消费入口，onHotReloading 必须只调本方法）。
-     * 四类资源判定与原因文本在同一次加锁内生成，登记线程无法插在「查完一类到返回」之间；
-     * 返回的快照不可变，发出后不受后续登记影响（点时语义）。调用方需先持有
-     * {@link HookRuntime#installLock()}，使判定与 hook 安装互斥（审计 F2）。
+     * 一次性完整判定快照（与 {@link #describe()} 同源同窗）。四类资源判定与原因文本在
+     * 同一次加锁内生成，登记线程无法插在「查完一类到返回」之间；返回的快照不可变，
+     * 发出后不受后续登记影响（点时语义）。onHotReloading 已无条件拒绝，本方法保留供
+     * 诊断与测试（含并发回归），不得重新用作放行判定。
      */
     public static GateSnapshot inspectReloadSafety() {
         synchronized (LOCK) {
@@ -130,7 +128,7 @@ public final class HotReloadSafety {
             this.describe = describe;
         }
 
-        /** 四类 teardown-unsafe 资源都不存在时为 true（06 文档 §2 放行条件）。 */
+        /** 四类 teardown-unsafe 资源都不存在时为 true（第一版门控的放行条件；现仅供诊断/测试）。 */
         public boolean isClean() { return !nativeHooks && !moduleThreads && !externalCallbacks && !javaHooks; }
 
         public boolean hasNativeHooks() { return nativeHooks; }

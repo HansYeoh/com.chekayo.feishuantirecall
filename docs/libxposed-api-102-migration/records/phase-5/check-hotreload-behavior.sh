@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # 阶段 5 出口验证 2：宿主 JVM 直跑 hot reload 安全门控行为测试（不进 APK、不依赖真机）。
 # 用法：在仓库根目录执行  bash docs/libxposed-api-102-migration/records/phase-5/check-hotreload-behavior.sh
-# 覆盖：三类资源门控（native/线程/外部回调任一存在即拒绝，全干净放行）、
-#       闩幂等与延时任务计数语义、放行传 classloader-neutral 门控结论、
+# 覆盖：四类资源状态表登记语义（native/线程/外部回调/已装 Java hook——2026-10 审计 F2
+#       第二轮起 onHotReloading 无条件拒绝，状态表作拒绝日志 describe 诊断）、
+#       闩幂等与延时任务计数语义、统一拒绝（资源全空/清空状态表均拒绝）、
 #       新一代入口（bind + 旧 handle 全量 unhook + ModulePath + 不做业务分发）、
 #       bind 失败 fail-closed、reload 后新包照常完整分发、同 loader 跨代 bind 拒绝保持。
 # 运行时 classpath 含 android.jar（stub 抛错即各业务安装点 fail-soft），无 stubs。

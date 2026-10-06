@@ -20,13 +20,12 @@ import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam;
  * - onModuleLoaded：只做进程级初始化（绑定 ModuleRuntime、回写两个 MODULE_PATH），
  *   此时没有目标包 ClassLoader，禁止安装业务 hook；
  * - onPackageReady：唯一完整业务分发入口；onPackageLoaded 只记日志，防止双重分发重复 hook；
- * - onHotReloading：按 {@link HotReloadSafety} 状态门控（06 文档 §2）——本代装过 native
- *   inline hook、模块自有线程、外部回调或任何 Java hook（含已开始业务分发，审计 F2 修复）
- *   即 fail-closed 返回 false（这些资源都没有 teardown 能力，或卸载后不会重新分发，放行
- *   会让旧代码和新代码叠加运行/已装功能静默丢失；配置桥接收器对任意注入进程安装，故所有
- *   已完成分发的进程都会拒绝）；只有什么都没装的注入进程才放行。判定先持
- *   HookRuntime.installLock，与 hook 安装互斥。README §2：声明 autoHotReload=true
- *   但安全拒绝优先，不宣称完整 reload 支持；
+ * - onHotReloading：无条件拒绝（2026-10 审计 F2 第二轮收紧）。第一版按 HotReloadSafety
+ *   快照放行「干净」进程，但放行是点时决策——快照成立后并发分发线程仍可开始装 hook，
+ *   且没有「返回 true 后旧代停止安装」的退役状态，竞争窗口无法彻底关闭；而真机现网
+ *   任何进程都至少持有配置桥（阶段 7：allow 路径真机不可达），统一拒绝不损失现网能力。
+ *   HotReloadSafety 状态表保留作 reload 诊断（拒绝日志附 describe 清单）。README §2：
+ *   声明 autoHotReload=true 但安全拒绝优先，不宣称完整 reload 支持；
  * - onHotReloaded：新一代唯一生命周期入口（API 102 契约：reload 不重放 onModuleLoaded 与
  *   包回调）——bind 运行时 + 旧 handle 全量 unhook（框架默认实现）+ 补 ModulePath；
  *   reload 后新加载的包照常经 onPackageReady 进入完整分发；
@@ -71,11 +70,9 @@ public final class FeishuKitModule extends XposedModule {
         String pkg = param.getPackageName();
         ClassLoader cl = param.getClassLoader();
 
-        // 审计 F2：业务分发一开始（含任意注入进程的配置桥延迟 hook）即登记本代不可热重载。
-        // 真机启动窗口实测约一秒：后台进程已装大量 Java hook、配置桥 callApplicationOnCreate
-        // 后置回调却还没注册 Receiver，旧门控只查 native/线程/外部回调会误判「干净」放行 reload，
-        // 旧 hook 被框架卸载后 onHotReloaded 不重分发，功能静默丢失到进程重启。该登记与
-        // onHotReloading 的门控判定经 HookRuntime.installLock 互斥，竞态空档关闭。
+        // 诊断登记（06 文档 §3 状态表）：业务分发一开始（含任意注入进程的配置桥延迟
+        // hook）即记「本代开始过分发」。2026-10 审计 F2 第二轮起 onHotReloading 无条件
+        // 拒绝，本登记不再参与放行判定，保留为 reload 诊断与未来「旧代退役」实现的输入。
         HotReloadSafety.markJavaHook("dispatch-begun");
 
         // 跨进程配置桥对任意注入进程安装（legacy handleLoadPackage 先于过滤执行，行为对齐；
@@ -109,28 +106,18 @@ public final class FeishuKitModule extends XposedModule {
 
     @Override
     public boolean onHotReloading(HotReloadingParam param) {
-        // 06 文档 §2 第一版策略：任一 teardown-unsafe 资源存在即拒绝（运行在旧代代码里）。
-        // native inline hook / 安装与轮询线程 / 配置桥接收器都没有 unhook+dlclose /
-        // 停线程 / unregister 的生命周期，放行 = 旧 hook 与新 hook 叠加、旧线程持有旧代引用；
-        // 审计 F2 起第四类：本代装过任何 Java hook / 已开始业务分发同样拒绝——Java hook
-        // 虽可被框架卸载，但 onHotReloaded 不会对已分发的包重新分发，放行 = 已装功能静默丢失。
-        // 判定走单次锁内快照（阶段 5 审计 P1 修复）：四类资源与原因文本在同一次加锁内生成；
-        // 且先持 HookRuntime.installLock 再取快照，安装线程无法插在「查完资源到返回放行」
-        // 之间装上新 hook（判定与安装互斥）。快照不可变，决策与理由来自同一瞬间。
-        synchronized (HookRuntime.installLock()) {
-            HotReloadSafety.GateSnapshot safety = HotReloadSafety.inspectReloadSafety();
-            if (!safety.isClean()) {
-                ModuleLog.log("hot reload rejected: runtime is not teardown-safe -> " + safety.describe());
-                return false;
-            }
-            try {
-                // classloader-neutral 字符串：新一代在 onHotReloaded 读到的旧代门控结论（诊断用；
-                // 放行与否的权威是框架只在本回调返回 true 后才换代这一契约本身）
-                param.setSavedInstanceState("feishukit:generation-clean");
-            } catch (Throwable ignored) {}
-            ModuleLog.log("hot reload accepted: generation holds no teardown-unsafe resources");
-            return true;
-        }
+        // 2026-10 审计 F2 第二轮：无条件拒绝（复审推翻了第一版「干净放行」）。
+        // 放行是点时决策：即使持安装锁取到干净快照，快照成立后并发分发线程仍可开始
+        // 装 hook（dispatch-begun 登记只持 HotReloadSafety 内部锁，且即便把它移进安装
+        // 锁，返回 true 之后也没有「本代退役、禁止继续分发/安装」的状态）——旧代继续
+        // 装上的 hook 在框架换代后或泄漏或失效，竞争窗口无法用单次快照彻底关闭。
+        // 真机现网任何已注入进程都至少持有配置桥接收器或其延迟 hook（阶段 7 记录：
+        // allow 路径真机不可达），统一拒绝不损失现网能力；保留放行需要完整的旧代
+        // 停止安装 + 新代接管协议，留待真正需要 hot reload 时实现。
+        // HotReloadSafety 状态表保留作诊断：拒绝日志附 describe 资源清单。
+        ModuleLog.log("hot reload rejected: unconditional fail-closed"
+                + " (generation transition unsupported); safety=" + HotReloadSafety.describe());
+        return false;
     }
 
     @Override

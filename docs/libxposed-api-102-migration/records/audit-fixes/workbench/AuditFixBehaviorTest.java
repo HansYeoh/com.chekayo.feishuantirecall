@@ -22,9 +22,9 @@ import java.util.Map;
  * - F1 修复断言：AiPeekBlock addView/setVisibility、AntiRecall ReadReqHook 短参数路径、
  *   InvokeHook 提前放行分支、MapperHook 提前返回分支——宿主异常必须原样上抛，
  *   且原方法只执行一次（修复前：异常被吞、proceed 被二次调用）；
- * - F2 修复断言：真实分发后（Java hook 在册、其余三类资源全空的启动窗口形态）
- *   onHotReloading 必须拒绝；分发开始但零 hook 安装成功同样拒绝（fail-closed）；
- *   清空登记（模拟换代）后恢复放行；
+ * - F2 修复断言（第二轮收紧）：onHotReloading 无条件拒绝——真实分发后（Java hook 在册、
+ *   其余三类资源全空的启动窗口形态）拒绝、状态表清空（模拟换代）后仍拒绝、分发开始但
+ *   零 hook 安装成功（独立换代 + 抛错框架真实收到安装尝试）同样拒绝；
  * - F4 修复断言：findMethodExact 不上溯父类（子类未覆盖时抛 NoSuchMethodException
  *   而不是误挂父类实现）、int/Integer 按 Class 身份严格区分；callMethod 的
  *   best-match 沿父类语义保持不变；
@@ -99,9 +99,11 @@ public class AuditFixBehaviorTest {
         }
     }
 
-    /** hook() 直接抛异常的伪造框架：模拟「分发开始但零 hook 安装成功」（F2 fail-closed 面）。 */
+    /** hook() 直接抛异常的伪造框架：模拟「分发开始但零 hook 安装成功」（F2 断言用）。 */
     static class ThrowingXposed extends CapturingXposed {
+        int installAttempts = 0;
         public XposedInterface.HookBuilder hook(Executable target) {
+            installAttempts++;
             throw new UnsupportedOperationException("all installs fail");
         }
     }
@@ -146,6 +148,21 @@ public class AuditFixBehaviorTest {
         return null;
     }
 
+    /**
+     * 模拟进入新模块代：真机新代由新 ClassLoader 加载、static 全新；同 loader 测试里
+     * 清 ModuleRuntime static + 安全表等效。不重置会让下一个模块 bind 被拒、分发仍走
+     * 旧模块的框架（复审 P3：零安装用例曾因此假通过）。
+     */
+    static void resetRuntimeForNewGeneration() throws Exception {
+        for (String f : new String[]{"sModule", "sGenerationId", "sProcessName",
+                "sModuleApkPath", "sPackageName", "sPackageClassLoader"}) {
+            java.lang.reflect.Field fd = ModuleRuntime.class.getDeclaredField(f);
+            fd.setAccessible(true);
+            fd.set(null, null);
+        }
+        HotReloadSafety.resetForTest();
+    }
+
     /** 断言：回调把宿主异常原样上抛，且原方法只执行了一次（F1 修复的核心行为）。 */
     static void checkSingleProceedAndRethrow(XposedInterface.Hooker hooker, ThrowOnceChain chain, String what) {
         boolean rethrown = false;
@@ -172,7 +189,9 @@ public class AuditFixBehaviorTest {
         check(fx.hooks.size() > 0 && HookRuntime.snapshot().size() == fx.hooks.size(),
                 "真实分发已装 hook（installed=" + fx.hooks.size() + "）");
 
-        // ══ F2：已装 Java hook 的进程请求 reload 必须拒绝（启动窗口竞态关闭） ══
+        // ══ F2（第二轮收紧）：onHotReloading 无条件拒绝，覆盖启动窗口全部形态 ══
+        // 第一版「干净放行」存在不可关闭的竞争窗口（放行是点时决策：快照成立后并发
+        // 分发线程仍可继续装 hook，且没有旧代退役状态），复审后统一 fail-closed。
         check(HotReloadSafety.hasJavaHooks() && !HotReloadSafety.hasNativeHooks()
                 && !HotReloadSafety.hasModuleThreads() && !HotReloadSafety.hasExternalCallbacks(),
                 "启动窗口形态：仅 java-hooks 登记，native/线程/接收器全空");
@@ -181,20 +200,67 @@ public class AuditFixBehaviorTest {
         check(module.onHotReloading(new FakeHotReloadingParam()) == false,
                 "F2: 已装 hook、接收器未注册的进程请求 reload 拒绝");
         HotReloadSafety.resetForTest();
-        check(module.onHotReloading(new FakeHotReloadingParam()) == true,
-                "F2: 清空登记（模拟换代）后恢复放行");
-        // 分发开始但零 hook 安装成功：dispatch-begun 登记仍在，依旧拒绝（fail-closed）
+        check(module.onHotReloading(new FakeHotReloadingParam()) == false,
+                "F2: 状态表清空（模拟换代）后仍无条件拒绝");
+        // 分发开始但零 hook 安装成功（独立换代 + 专用抛错框架）：同样拒绝。
+        // 必须重置 ModuleRuntime——否则 m2 的 bind 被拒、分发仍走旧框架（复审 P3 假通过）；
+        // 并断言抛错框架确实收到安装尝试、一条都没装上。
         HotReloadSafety.resetForTest();
-        CapturingXposed tx = new ThrowingXposed();
+        resetRuntimeForNewGeneration();
+        ThrowingXposed tx = new ThrowingXposed();
         FeishuKitModule m2 = new FeishuKitModule();
         m2.attachFramework(tx, new Runnable() { public void run() { } });
         m2.onModuleLoaded(new FakeModuleLoadedParam());
         m2.onPackageReady(new FakePackageParam(
                 "com.ss.android.lark", new URLClassLoader(new URL[0], null)));
-        check(HotReloadSafety.hasJavaHooks() && tx.hooks.isEmpty(),
+        check(tx.installAttempts > 0 && tx.hooks.isEmpty(),
+                "F2 前置: 抛错框架真实收到安装尝试（attempts=" + tx.installAttempts
+                        + "）且零安装成功");
+        check(HotReloadSafety.hasJavaHooks(),
                 "F2: 零 hook 安装成功但 dispatch-begun 登记仍在");
         check(m2.onHotReloading(new FakeHotReloadingParam()) == false,
                 "F2: 分发开始过但零 hook 的进程拒绝 reload");
+        HotReloadSafety.resetForTest();
+        // 并发回归（复审 P2 夹具场景的等价锁定）：分发线程执行真实 onPackageReady 期间
+        // 门控被另一线程并发轮询——统一拒绝下任何交错都必须返回 false，不存在可穿越的
+        // 放行窗口（第一版「干净放行」正是被这类夹具稳定穿越的）。
+        resetRuntimeForNewGeneration();
+        final FeishuKitModule m3 = new FeishuKitModule();
+        m3.attachFramework(new CapturingXposed(), new Runnable() { public void run() { } });
+        m3.onModuleLoaded(new FakeModuleLoadedParam());
+        final java.util.concurrent.atomic.AtomicInteger gateCalls =
+                new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger gateNotRefused =
+                new java.util.concurrent.atomic.AtomicInteger();
+        Thread dispatcher = new Thread(new Runnable() {
+            public void run() {
+                for (int i = 0; i < 20; i++) {
+                    try {
+                        m3.onPackageReady(new FakePackageParam("com.ss.android.lark",
+                                new URLClassLoader(new URL[0], null)));
+                    } catch (Throwable ignored) { /* 各安装点 fail-soft，分发不中断 */ }
+                }
+            }
+        }, "auditfix-dispatcher");
+        Thread gate = new Thread(new Runnable() {
+            public void run() {
+                for (int i = 0; i < 2000; i++) {
+                    gateCalls.incrementAndGet();
+                    try {
+                        if (m3.onHotReloading(new FakeHotReloadingParam())) gateNotRefused.incrementAndGet();
+                    } catch (Throwable t) {
+                        gateNotRefused.incrementAndGet();   // 门控抛异常同样视为失败
+                    }
+                }
+            }
+        }, "auditfix-gate");
+        dispatcher.start();
+        gate.start();
+        dispatcher.join();
+        gate.join();
+        check(gateCalls.get() == 2000 && gateNotRefused.get() == 0,
+                "F2 并发回归: 分发与门控全程竞争 2000 次全部拒绝（未拒绝/异常="
+                        + gateNotRefused.get() + "）");
         HotReloadSafety.resetForTest();
 
         // ══ F1：宿主异常原样上抛，原方法只执行一次 ══

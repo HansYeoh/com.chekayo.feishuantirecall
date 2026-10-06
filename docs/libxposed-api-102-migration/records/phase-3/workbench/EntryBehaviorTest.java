@@ -190,17 +190,18 @@ public class EntryBehaviorTest {
         String key = FeishuKitModule.dispatchKey(FEISHU, cl1);
         check(key.startsWith("main|" + FEISHU + "|"), "幂等键 = process|package|ClassLoader identity");
 
-        // ── 9. hot reload 安全门控（阶段5 升级：按 HotReloadSafety 状态拒绝/放行，06 文档 §2。
-        //      阶段3 的「无条件 fail-closed」契约由本节新断言替代，演进已在阶段5 记录中说明） ──
+        // ── 9. hot reload 门控（阶段5 起接 HotReloadSafety；2026-10 审计 F2 第二轮收紧为
+        //      无条件拒绝——「干净放行」是点时决策，无法与并发分发关闭竞争窗口） ──
         HotReloadSafety.markExternalCallback("config-bridge.receiver(sync,pull)");   // 现网任意已分发进程都有配置桥接收器
         FakeHotReloadingParam rejectParam = new FakeHotReloadingParam();
         check(m.onHotReloading(rejectParam) == false, "持有外部回调时 onHotReloading 返回 false（拒绝）");
         check(logCount("hot reload rejected") == 1, "拒绝原因已记日志");
         check(rejectParam.savedState == null, "拒绝时不向新一代传门控结论");
         HotReloadSafety.resetForTest();
-        FakeHotReloadingParam acceptParam = new FakeHotReloadingParam();
-        check(m.onHotReloading(acceptParam) == true, "无 teardown-unsafe 资源时放行（06 文档 §2）");
-        check("feishukit:generation-clean".equals(acceptParam.savedState), "放行时传 classloader-neutral 门控结论");
+        FakeHotReloadingParam cleanParam = new FakeHotReloadingParam();
+        check(m.onHotReloading(cleanParam) == false,
+                "状态表清空后仍无条件拒绝（统一 fail-closed，不传门控结论）");
+        check(cleanParam.savedState == null, "无条件拒绝同样不向新一代传任何状态");
         // 新一代入口（阶段5 起）：本测试同 loader 下 bind 幂等（真机新代是新 ClassLoader，bind 必成）
         m.onHotReloaded(new FakeHotReloadedParam());
         check(logCount("onHotReloaded: generation") == 1, "onHotReloaded 接线：bind + 旧 handle 清理 + ModulePath");

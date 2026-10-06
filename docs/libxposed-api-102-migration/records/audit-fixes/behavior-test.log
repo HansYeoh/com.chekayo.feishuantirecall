@@ -6,9 +6,11 @@ javac OKï¼ˆæ—  stubsï¼‰
 [PASS] Æô¶¯´°¿ÚĞÎÌ¬£º½ö java-hooks µÇ¼Ç£¬native/Ïß³Ì/½ÓÊÕÆ÷È«¿Õ
 [PASS] describe ÁĞ³ö java-hooks ·Ö×é: java-hooks=[installed-java-hooks,dispatch-begun]
 [PASS] F2: ÒÑ×° hook¡¢½ÓÊÕÆ÷Î´×¢²áµÄ½ø³ÌÇëÇó reload ¾Ü¾ø
-[PASS] F2: Çå¿ÕµÇ¼Ç£¨Ä£Äâ»»´ú£©ºó»Ö¸´·ÅĞĞ
+[PASS] F2: ×´Ì¬±íÇå¿Õ£¨Ä£Äâ»»´ú£©ºóÈÔÎŞÌõ¼ş¾Ü¾ø
+[PASS] F2 Ç°ÖÃ: Å×´í¿ò¼ÜÕæÊµÊÕµ½°²×°³¢ÊÔ£¨attempts=12£©ÇÒÁã°²×°³É¹¦
 [PASS] F2: Áã hook °²×°³É¹¦µ« dispatch-begun µÇ¼ÇÈÔÔÚ
 [PASS] F2: ·Ö·¢¿ªÊ¼¹ıµ«Áã hook µÄ½ø³Ì¾Ü¾ø reload
+[PASS] F2 ²¢·¢»Ø¹é: ·Ö·¢ÓëÃÅ¿ØÈ«³Ì¾ºÕù 2000 ´ÎÈ«²¿¾Ü¾ø£¨Î´¾Ü¾ø/Òì³£=0£©
 [PASS] F1 Ç°ÖÃ: ²¶»ñµ½Éú²ú addView hooker
 [PASS] F1: addView ¿ª¹Ø¹Ø¡ª¡ªËŞÖ÷Òì³£ÉÏÅ×ÇÒÔ­·½·¨Ö»Ö´ĞĞÒ»´Î£¨Òì³£Ô­ÑùÉÏÅ×=true, proceedCalls=1£©
 [PASS] F1 Ç°ÖÃ: ²¶»ñµ½Éú²ú setVisibility hooker

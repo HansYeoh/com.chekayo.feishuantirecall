@@ -3,7 +3,8 @@
 # 用法：在仓库根目录执行  bash docs/libxposed-api-102-migration/records/audit-fixes/check-audit-fix-behavior.sh
 # 覆盖：F1（宿主异常上抛且原方法只执行一次：AiPeekBlock addView/setVisibility、
 #       ReadReqHook 短参数、InvokeHook 提前放行分支、MapperHook 提前返回分支）、
-#       F2（已装 Java hook / 分发开始即拒绝 reload；零 hook 安装成功同样拒绝；清登记恢复放行）、
+#       F2（onHotReloading 无条件拒绝：已装 hook/分发开始过/状态表清空三形态都拒绝；
+#       零 hook 安装成功用例要求独立换代 + 抛错框架真实收到安装尝试——复审 P3 隔离要求）、
 #       F4（findMethodExact 不上溯父类、int/Integer 严格区分；callMethod best-match 保留）、
 #       F5（动态实现类 hook ID 含声明类+签名；同键不同 Executable 报冲突；同键幂等保留）。
 #       F3（module.prop staticScope=false 动态作用域）为元数据契约，由本脚本的 grep 断言覆盖。

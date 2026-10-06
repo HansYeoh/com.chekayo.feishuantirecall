@@ -1,9 +1,9 @@
 # 2026-10 分支代码审计修复记录
 
-- **日期**：2026-10-06
-- **输入**：分支代码审计报告（`build/audit/audit-report.txt`，审计 HEAD `69c09af`，基线 `main/544b593`）+ 审计方复核结论（Codex 会话复核，未发现误报，5 项维持 P2）
-- **范围**：仅修复审计发现的 5 项 P2 问题与失效的第 2 阶段验证入口；不改 native/jni、不改版本号、不动业务行为基线
-- **验证**：`check-audit-fix-behavior.sh`（本目录，新增）+ 既有第 2/3/4/5 阶段行为脚本全量重跑；全量 app 源码编译通过
+- **日期**：2026-10-06（第一轮 `fae6bcb`；第二轮复审后收紧 F2 并修 P3 测试缺陷）
+- **输入**：分支代码审计报告（`build/audit/audit-report.txt`，审计 HEAD `69c09af`，基线 `main/544b593`）+ 审计方复核结论（第一轮：无误报，5 项维持 P2；第二轮复审 `fae6bcb`：F1/F3/F4/F5 与第 2 阶段入口修复通过，F2 仍存一个 P2 并发问题，另有一个 P3 测试假通过）
+- **范围**：仅修复审计发现的问题与失效的第 2 阶段验证入口；不改 native/jni、不改版本号、不动业务行为基线
+- **验证**：`check-audit-fix-behavior.sh`（本目录）+ 既有第 2/3/4/5 阶段行为脚本全量重跑；全量 app 源码编译通过
 
 ## 修复清单
 
@@ -13,15 +13,19 @@
 - 修复模式统一：只有模块自身的预处理逻辑（判定、打标、改参、日志）允许处于吞异常的 `try` 内；原方法放行（`chain.proceed`）与短路（`return null`）移到 `try` 之外，每条路径恰好执行一次。宿主异常原样上抛，不再被吞、不再触发第二次执行。
 - 语义保持：放行/短路/改参（如 setVisibility 强制 GONE、ReadReqHook 浏览清空与回复合并）与 legacy `beforeHookedMethod` 边界一致；after-hook 形态的 hooker（setText、getAuditDependency 等）本来就先 `proceed()` 后处理，不在本问题面内，未改动。
 
-### F2 [P2] 启动期间热重载会错误放行，并卸载已经安装的功能 —— 已修复
+### F2 [P2] 启动期间热重载会错误放行，并卸载已经安装的功能 —— 已修复（两轮）
 
-- 采纳审计建议的「登记不可热重载状态 + 生命周期决策与安装互斥」，并叠加「已装 Java hook 即拒绝」：
-  1. `HotReloadSafety` 新增第四类资源 `JAVA_HOOK`（`markJavaHook` / `hasJavaHooks` / describe 分组 `java-hooks=[...]`），`GateSnapshot.isClean` 纳入四类判定；
-  2. `HookRuntime.hook()` 在安装锁内、任何 hook 对框架可见之前登记 `installed-java-hooks`——登记与安装原子，安装线程不可能被门控漏检；
-  3. `FeishuKitModule.onPackageReady` 在业务分发开始（含任意注入进程的配置桥延迟 hook）前登记 `dispatch-begun`——「分发开始过但零 hook 安装成功」的进程同样 fail-closed；
-  4. `FeishuKitModule.onHotReloading` 先持 `HookRuntime.installLock()` 再取安全快照——门控判定与 hook 安装串行化，并发分发线程无法插在「查完资源到返回放行」之间装上新 hook（锁序恒为 installLock → HotReloadSafety 内部锁，无反向路径）。
-- 真机启动窗口（`:wschannel` 约 1 秒的延迟绑定空档）内「已装大量 Java hook、配置桥接收器尚未注册」的进程不再被误判为干净；reload 拒绝后不存在「旧 hook 被框架卸载且新代不重分发」的功能丢失路径。
-- 已知边界：与框架的换代交互仍以「框架按目标串行化 reload」为前提（阶段 5/6 文档既有结论）；本修复消除的是模块侧可观测的错误放行判定。
+**第一轮（`fae6bcb`）**：按审计建议登记不可热重载状态并令门控与安装互斥——HotReloadSafety 新增第四类资源 `JAVA_HOOK`；`HookRuntime.hook` 在安装锁内、hook 对框架可见之前登记 `installed-java-hooks`；`onPackageReady` 分发开始前登记 `dispatch-begun`；`onHotReloading` 持 `HookRuntime.installLock()` 再取快照。关闭了「已装 hook 后请求 reload 被误判干净」的场景。
+
+**第二轮（本提交，复审 P2 推翻放行路径）**：复审并发夹具证明第一版仍可被穿越——`onHotReloading` 持安装锁取得干净快照后，另一线程可执行真实 `onPackageReady`（`dispatch-begun` 只持 HotReloadSafety 内部锁，先登记、再阻塞于安装锁），门控仍用旧快照返回 `true`；且返回 `true` 后不存在「本代退役、禁止继续分发/安装」的状态，**仅把登记移进安装锁也无法覆盖**（旧代会在换代窗口内继续安装，或被卸载不重装、或跨代残留）。夹具输出：返回前 `dispatchMarked=true, installedHooks=0`；返回后 `reloadAccepted=true, installedHooks=19`。
+
+第二轮修复：**`onHotReloading` 无条件拒绝（统一 fail-closed）**。理由：
+
+- 放行决策是点时的，单次快照在结构上无法覆盖「决策之后、换代完成之前」的并发安装；彻底关闭需要完整的旧代停止安装 + 新代接管协议，不是 reload 场景的当下需求。
+- 真机现网任何已注入进程都至少持有配置桥接收器或其延迟 hook（阶段 7 记录：allow 路径真机不可达），统一拒绝不损失现网能力。
+- `module.prop` 的 `autoHotReload=true` 维持不变（README §2 既有口径：声明能力但安全拒绝优先，不宣称完整 reload 支持）；`HotReloadSafety` 四类状态表保留作拒绝日志的 describe 诊断与未来退役实现的资源盘点；`onHotReloaded` 入口接线保留（防御性契约完整，正常情况下不可达）。
+
+同步改动：`HookRuntime.installLock()` 访问器删除（门控不再消费）；`dispatch-begun`/`installed-java-hooks` 登记保留（诊断语义）；06-hot-reload.md §2 增补两轮收紧注记（第一版设计原文保留追溯）。
 
 ### F3 [P2] 固定作用域声明与白标支持冲突 —— 已修复
 
@@ -48,11 +52,16 @@
 
 ## 同步更新的既有测试
 
-- `records/phase-5/workbench/HotReloadBehaviorTest.java`：门控断言由三类扩为四类（§1/§13/§14）；新增 §15——真实分发后（仅 java-hooks 登记、其余三类全空的启动窗口形态）拒绝 reload、零 hook 安装成功的分发过进程拒绝 reload、清登记（模拟换代）恢复放行。
+- `records/phase-5/workbench/HotReloadBehaviorTest.java`：状态表断言由三类扩为四类（§1/§13/§14）；§15——真实分发后（仅 java-hooks 登记、其余三类全空的启动窗口形态）拒绝 reload、零 hook 安装成功的分发过进程拒绝 reload、清登记（模拟换代）后仍拒绝。第二轮起全部「干净放行」断言改为「统一拒绝」（§2/§3 计数/§7/§14 并发 8 次全拒/收尾），状态表断言保留（诊断语义）。
+- `records/phase-3/workbench/EntryBehaviorTest.java`：§9 同步——「状态表清空后放行」改为「清空后仍无条件拒绝、不向新一代传任何状态」。
+
+## 第二轮复审修复（P3）
+
+- **复审 P3：`AuditFixBehaviorTest` 的「零 hook 安装成功」用例假通过**——只清了 HotReloadSafety、没重置 `ModuleRuntime`，第二个模块 `bind` 被拒，分发实际仍走第一个模块的（成功安装型）框架，12 个 hook 装进了旧框架，抛错框架从未被调用。修复：用例前完整重置运行时（`resetRuntimeForNewGeneration`，与 phase-5 用例同法），并新增断言「抛错框架真实收到安装尝试（`installAttempts > 0`）且零安装成功（`hooks.isEmpty()`）」。
 
 ## 验证记录
 
-- `check-audit-fix-behavior.sh`：F3 元数据 grep 断言 + F1/F2/F4/F5 行为断言（宿主 JVM，真实分发后故障注入），全部 PASS，输出见 `behavior-test.log`。
-- 阶段 2/3/4/5 四个既有行为脚本全量重跑 PASS（阶段 2 使用修复后的编译集）。
+- `check-audit-fix-behavior.sh`：F3 元数据 grep 断言 + F1/F2/F4/F5 行为断言（宿主 JVM，真实分发后故障注入），全部 PASS，输出见 `behavior-test.log`（含第二轮统一拒绝三形态与 P3 隔离断言）。
+- 阶段 2/3/4/5 四个既有行为脚本全量重跑 PASS（阶段 2 使用修复后的编译集；阶段 3/5 的门控断言按第二轮统一拒绝语义更新）。
 - 全量 app 源码 `javac` 编译通过（`-source/-target 8 -bootclasspath android.jar`）。
-- 未做：真机安装/热重载/功能矩阵重测（本修复不改变正常路径行为，真机回归留待阶段 8 前按需执行）；未重编译 native（零改动）。
+- 未做：真机安装/热重载/功能矩阵重测（本修复不改变正常路径行为，真机回归留待阶段 8 前按需执行）；未重编译 native（零改动）；未重建 APK（build.ps1 会清空 build/ 审计现场，module.prop 为数据文件无构建耦合，留阶段 8 构建时验证）。

@@ -6,9 +6,9 @@ javac OKï¼ˆæ—  stubsï¼‰
 [PASS] ¸É¾»½ø³ÌÎÞÍâ²¿»Øµ÷µÇ¼Ç
 [PASS] ¸É¾»½ø³ÌÎÞ Java hook µÇ¼Ç
 [PASS] describe ¸É¾»Ì¬ = (clean)
-[PASS] ÎÞ teardown-unsafe ×ÊÔ´Ê± onHotReloading ·µ»Ø true
-[PASS] ·ÅÐÐÊ±ÏòÐÂÒ»´ú´«ÃÅ¿Ø½áÂÛ£¨ÇÒÖ»´«Ò»´Î£©
-[PASS] ·ÅÐÐÒÑ¼ÇÈÕÖ¾
+[PASS] ËÄÀà×ÊÔ´È«¿ÕÊ± onHotReloading Ò²ÎÞÌõ¼þ¾Ü¾ø
+[PASS] ¾Ü¾øÊ±²»ÏòÐÂÒ»´ú´«ÈÎºÎ×´Ì¬
+[PASS] Í³Ò»¾Ü¾øÒÑ¼ÇÈÕÖ¾£¨º¬Õï¶Ï describe£©
 [PASS] native µÇ¼ÇÖ»Ó°ÏìÃÅ¿ØÒ»
 [PASS] ´æÔÚ native hook Ê±¾Ü¾ø reload
 [PASS] ¾Ü¾øÊ±²»ÏòÐÂÒ»´ú´«ÈÎºÎ×´Ì¬
@@ -22,12 +22,12 @@ javac OKï¼ˆæ—  stubsï¼‰
 [PASS] ´æÔÚÎ´Íê³ÉÑÓÊ±ÈÎÎñÊ±¾Ü¾ø reload
 [PASS] Ê£Ò»¸öÎ´Íê³ÉÑÓÊ±ÈÎÎñÈÔ¾Ü¾øÓïÒå³ÉÁ¢
 [PASS] ¼ÆÊý¹éÁãºó»Øµ½¸É¾»Ì¬£¨¶àÓà end ²»²úÉú¸ºÊý£©
-[PASS] ÑÓÊ±ÈÎÎñÈ«²¿½áÊøºóÖØÐÂ·ÅÐÐ
+[PASS] ÑÓÊ±ÈÎÎñÈ«²¿½áÊø£¨×´Ì¬±í¸É¾»£©ºóÈÔÍ³Ò»¾Ü¾ø£¨±íÖ»×÷Õï¶Ï£©
 [PASS] ÈýÀà×ÊÔ´²¢´æÊ±Á½´ÎÐ­ÉÌ¶¼¾Ü¾ø£¨ÎÈ¶¨¡¢ÎÞÒì³££©
 [PASS] describe ·Ö×éÁÐ³öÈýÀà×ÊÔ´: native=[resigntracker.native-inline] threads=[lark-resign-boot] callbacks=[download-mirror.file-observer]
 [PASS] ¾Ü¾øÂ·¾¶²»Ð´ savedState
 [PASS] ÐÂ´ú onHotReloaded Íê³ÉÔËÐÐÊ±°ó¶¨
-[PASS] »»´úºó generation id ¸üÐÂ: 5ae8947f-bb05-4a0b-9152-7fccbe573c1b -> d85a4a1a-4da4-40a3-8504-19227bce686b
+[PASS] »»´úºó generation id ¸üÐÂ: f53de73a-2ca8-4266-8291-fcbf080ff1b0 -> f377f698-1349-4ebb-bb13-c92866e48100
 [PASS] ¾É handle È«Á¿ÇÒ¸÷Ç¡ºÃ unhook Ò»´Î£¨¿ò¼ÜÄ¬ÈÏÓïÒå£©
 [PASS] »»´úÈÕÖ¾¼ÇÂ¼ÐÂ´ú id/savedState/¾É handle Êý
 [PASS] ÖðÌõ¼ÇÂ¼¾É handle id
@@ -48,14 +48,15 @@ javac OKï¼ˆæ—  stubsï¼‰
 [PASS] isClean ºãµÈÓÚËÄÀà²¼¶ûÖ®»òµÄ·Ç
 [PASS] ²¢·¢Ñ¹Á¦ÏÂ 2 Íò´Î¿ìÕÕÈ«²¿×ÔÇ¢£¨violations=0£©
 [PASS] Ð´Ïß³Ì½áÊøºóÑÓÊ±ÈÎÎñ¼ÆÊý¹éÁã¡¢»Øµ½¸É¾»Ì¬
-[PASS] ²¢·¢ÏÂÈë¿ÚÃÅ¿Ø 8 ´Î¾ö²ßÎÈ¶¨ÇÒ¾Ü¾ø±Ø¼ÇÈÕÖ¾£¨accepts=5 rejects=3£©
+[PASS] ²¢·¢ÏÂÈë¿Ú 8 ´Î¾ö²ßÈ«²¿Í³Ò»¾Ü¾øÇÒÃ¿´Î¼ÇÈÕÖ¾£¨accepts=0 rejects=8£©
 [PASS] ÒÑ·¢²¼µÄÍâ²¿»Øµ÷µÇ¼ÇÔÚ 500 ´ÎÅÐ¶¨ÖÐÁãÂ©¼ì
-[PASS] ÇåÀíºóÃÅ¿Ø»Ö¸´·ÅÐÐ
+[PASS] Ð´Ïß³Ì½áÊøºóÑÓÊ±ÈÎÎñ¼ÆÊý¹éÁã¡¢»Øµ½¸É¾»Ì¬
+[PASS] ×´Ì¬±íÇå¿ÕºóÍ³Ò»¾Ü¾ø±£³Ö²»±ä£¨ÎÞÌõ¼þ fail-closed£©
 [PASS] ÕæÊµ·Ö·¢ÒÑ×° Java hook£¨installed=14£©
-[PASS] Æô¶¯´°¿Ú¸´¿Ì£º½ö java-hooks ÀàµÇ¼Ç£¬ÆäÓàÈýÀàÈ«¿Õ
+[PASS] Æô¶¯´°¿ÚÐÎÌ¬£º½ö java-hooks ÀàµÇ¼Ç£¬ÆäÓàÈýÀàÈ«¿Õ
 [PASS] describe ÁÐ³ö java-hooks ·Ö×é: java-hooks=[installed-java-hooks,dispatch-begun]
-[PASS] ÒÑ×° Java hook µÄ½ø³ÌÇëÇó reload ¾Ü¾ø£¨Éó¼Æ F2£©
+[PASS] ÒÑ×° Java hook µÄ½ø³ÌÇëÇó reload ¾Ü¾ø
 [PASS] ·Ö·¢¿ªÊ¼µ«Áã hook °²×°³É¹¦£ºdispatch-begun µÇ¼ÇÈÔÔÚ
-[PASS] ·Ö·¢¿ªÊ¼¹ýµ«Áã hook µÄ½ø³ÌÍ¬Ñù¾Ü¾ø reload£¨fail-closed£©
-[PASS] Çå¿ÕµÇ¼Ç£¨Ä£Äâ»»´ú£©ºó»Ö¸´·ÅÐÐ
+[PASS] ·Ö·¢¿ªÊ¼¹ýµ«Áã hook µÄ½ø³ÌÍ¬Ñù¾Ü¾ø reload
+[PASS] ×´Ì¬±íÇå¿Õ£¨Ä£Äâ»»´ú£©ºóÈÔÎÞÌõ¼þ¾Ü¾ø
 == PASS£ºÈ«²¿ hot reload °²È«ÃÅ¿Ø¶ÏÑÔÍ¨¹ý ==
