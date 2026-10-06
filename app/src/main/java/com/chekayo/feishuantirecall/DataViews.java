@@ -45,11 +45,11 @@ final class DataViews {
     static volatile boolean donateShownThisSession = false;
 
     static final String[] UPDATE_MIRRORS = {
-        "https://ghproxy.net/https://raw.githubusercontent.com/haikow/com.chekayo.feishuantirecall/main/version.json",
-        "https://gh-proxy.com/raw.githubusercontent.com/haikow/com.chekayo.feishuantirecall/main/version.json",
-        "https://cdn.jsdelivr.net/gh/haikow/com.chekayo.feishuantirecall@main/version.json",
-        "https://fastly.jsdelivr.net/gh/haikow/com.chekayo.feishuantirecall@main/version.json",
-        "https://raw.githubusercontent.com/haikow/com.chekayo.feishuantirecall/main/version.json"
+        "https://ghproxy.net/https://raw.githubusercontent.com/haikow/com.chekayo.feishuantirecall/main/version-api102.json",
+        "https://gh-proxy.com/raw.githubusercontent.com/haikow/com.chekayo.feishuantirecall/main/version-api102.json",
+        "https://cdn.jsdelivr.net/gh/haikow/com.chekayo.feishuantirecall@main/version-api102.json",
+        "https://fastly.jsdelivr.net/gh/haikow/com.chekayo.feishuantirecall@main/version-api102.json",
+        "https://raw.githubusercontent.com/haikow/com.chekayo.feishuantirecall/main/version-api102.json"
     };
 
     /**
