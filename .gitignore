@@ -44,3 +44,7 @@ scripts/tg_release.sh
 scripts/wm_embed.py
 scripts/wm_extract.py
 tools/native-v163.apk
+
+# 逆向分析工作区(目标 APK/dex/截图/LSPosed 库副本 —— 版权+隐私, 绝不入库)
+tools/feishu8/
+tools/lspd/
