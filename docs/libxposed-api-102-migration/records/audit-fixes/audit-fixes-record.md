@@ -57,7 +57,18 @@
 
 ## 第二轮复审修复（P3）
 
-- **复审 P3：`AuditFixBehaviorTest` 的「零 hook 安装成功」用例假通过**——只清了 HotReloadSafety、没重置 `ModuleRuntime`，第二个模块 `bind` 被拒，分发实际仍走第一个模块的（成功安装型）框架，12 个 hook 装进了旧框架，抛错框架从未被调用。修复：用例前完整重置运行时（`resetRuntimeForNewGeneration`，与 phase-5 用例同法），并新增断言「抛错框架真实收到安装尝试（`installAttempts > 0`）且零安装成功（`hooks.isEmpty()`）」。
+- **复审 P3：`AuditFixBehaviorTest` 的「零 hook 安装成功」用例假通过**——只清了 HotReloadSafety、没重置 `ModuleRuntime`，第二个模块 `bind` 被拒，分发实际仍走第一个模块的（成功安装型）框架，12 个 hook 装进了旧框架，抛错框架从未被调用。修复：用例前完整重置运行时（`resetRuntimeForNewGeneration`，与 phase-5 用例同法），并新增断言「抛错框架真实收到安装尝试（`installAttempts > 0`）且零安装成功（`hooks.isEmpty()`）」。修复后实测 attempts=12，与复审复现数吻合。
+
+## 第二轮复审结论（2026-10-06，reaudit-ff3245e）
+
+**复审通过，本轮审计修复正式关闭，允许进入阶段 8。** 复审确认：
+
+- F2：`onHotReloading` 无条件返回 false，原放行竞争路径已消除。
+- P3：测试运行时隔离生效，抛错框架真实收到 12 次安装尝试、零安装成功。
+- 独立重跑 5 套行为脚本全部 exit 0；并发门控 2000 次全部拒绝、零异常。
+- 工作区干净，`diff --check` 通过；native/jni、version.json、Manifest 相对 69c09af 均无改动。
+
+非阻塞备注（HotReloadSafety 类头残留「按快照放行」旧表述）已当场清理：HotReloadSafety 与 FeishuKitModule.onHotReloaded 的 javadoc 改为诊断表/防御入口口径。本轮通过范围=代码与 JVM 回归审计；**阶段 8 仍需对新产物执行 build.ps1 构建、打包元数据核验与必要真机回归（阶段 7 的旧 APK 证据不能替代新产物验证）**。
 
 ## 验证记录
 

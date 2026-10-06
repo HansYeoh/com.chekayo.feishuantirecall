@@ -7,7 +7,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * hot reload 安全门控的资源状态表（06 文档 §3）。每个模块代一份：hot reload 新一代
+ * hot reload 资源状态表（06 文档 §3），现为诊断表。每个模块代一份：hot reload 新一代
  * 由新 ClassLoader 加载，static 状态天然按代隔离，新一代从空表起步，不存在跨代共享。
  *
  * 只做登记、不改变任何业务行为：各资源创建点在资源「已创建且无 teardown 能力」时打标。
@@ -17,18 +17,17 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 「旧代退役 + 新代接管」时的资源盘点输入。第一版按表门控的设计与两轮收紧过程见
  * records/audit-fixes/audit-fixes-record.md。
  *
- * 门控判定必须走 {@link #inspectReloadSafety()}：三类资源与原因文本在同一次加锁内生成
- * 不可变 {@link GateSnapshot}，「查完一类到返回」之间不存在被并发打标穿越的窗口
- * （阶段 5 审计 P1 修复：原实现三类查询各自加锁，登记可插在两类查询之间导致错误放行）。
- * 三个 has* 查询只作诊断/测试用途，不得用于门控判定。
+ * {@link #inspectReloadSafety()} 的快照性质（阶段 5 审计 P1 修复的结构保证，现服务于
+ * 诊断一致性）：四类资源判定与原因文本在同一次加锁内生成不可变 {@link GateSnapshot}，
+ * 「查完一类到返回」之间不存在被并发打标穿越的窗口（原实现各查询分别加锁，登记可插在
+ * 两类查询之间造成快照自相矛盾）。各 has* 查询仅供诊断/测试，不保证同窗。
  *
  * 登记语义（06 文档 §3.2/§3.3 的「是否启动/是否存在」）：
- * - native hook / 长生命周期线程 / 外部回调：一次性闩。第一版没有 teardown，
- *   这些资源在本代进程内不会消失，「已启动/已注册」即门控事实；
+ * - native hook / 长生命周期线程 / 外部回调 / Java hook：一次性闩。第一版没有 teardown，
+ *   这些资源在本代进程内不会消失，「已启动/已注册」即登记事实；
  * - ProfileCapture 延时任务：计数。任务体 run() 结束即递减，「是否存在」按未完成任务算。
  *
- * 门控查询与打标共用一把锁：onHotReloading 判空到返回之间不会被并发打标穿越
- * （框架本身对 reload 也按目标串行化，这里再加一层确定性）。
+ * 查询与打标共用一把锁，保证快照与原因文本同源同窗。
  */
 public final class HotReloadSafety {
 
@@ -77,10 +76,10 @@ public final class HotReloadSafety {
         }
     }
 
-    /** 是否存在已装载且无 teardown 能力的 native inline hook（06 文档 §2 门控一）。仅诊断/测试用，门控判定走 {@link #inspectReloadSafety()}。 */
+    /** 是否存在已装载且无 teardown 能力的 native inline hook（06 文档 §2 门控一）。仅诊断/测试用；完整快照走 {@link #inspectReloadSafety()}。 */
     public static boolean hasNativeHooks() { return hasKind(Kind.NATIVE_HOOK); }
 
-    /** 是否存在模块自有线程或未完成的延时任务（06 文档 §2 门控二；§3.2 把延时任务归线程状态）。仅诊断/测试用，门控判定走 {@link #inspectReloadSafety()}。 */
+    /** 是否存在模块自有线程或未完成的延时任务（06 文档 §2 门控二；§3.2 把延时任务归线程状态）。仅诊断/测试用；完整快照走 {@link #inspectReloadSafety()}。 */
     public static boolean hasModuleThreads() {
         synchronized (LOCK) {
             if (!PENDING_TASKS.isEmpty()) return true;
@@ -88,7 +87,7 @@ public final class HotReloadSafety {
         }
     }
 
-    /** 是否存在已注册的外部回调（06 文档 §2 门控三）。仅诊断/测试用，门控判定走 {@link #inspectReloadSafety()}。 */
+    /** 是否存在已注册的外部回调（06 文档 §2 门控三）。仅诊断/测试用；完整快照走 {@link #inspectReloadSafety()}。 */
     public static boolean hasExternalCallbacks() { return hasKind(Kind.EXTERNAL_CALLBACK); }
 
     /** 是否已装 Java hook / 已开始业务分发（审计 F2 引入的第四类）。仅诊断/测试用。 */
@@ -111,7 +110,7 @@ public final class HotReloadSafety {
         }
     }
 
-    /** 门控判定的不可变点时快照：isClean、四类布尔与 describe 来自同一加锁瞬间。 */
+    /** 不可变点时快照（第一版门控判定用，现服务于诊断一致性与并发回归）：isClean、四类布尔与 describe 来自同一加锁瞬间。 */
     public static final class GateSnapshot {
         private final boolean nativeHooks;
         private final boolean moduleThreads;
@@ -146,7 +145,7 @@ public final class HotReloadSafety {
     /**
      * 人类可读快照：拒绝原因日志与 reload 诊断用。
      * 全部为空时返回 "(clean)"，否则按 native/threads/callbacks/java-hooks 分组列出资源名。
-     * 门控判定请改用 {@link #inspectReloadSafety()}（本方法只诊断，不保证与其它查询同窗）。
+     * 完整快照请用 {@link #inspectReloadSafety()}（本方法只诊断，不保证与其它查询同窗）。
      */
     public static String describe() {
         synchronized (LOCK) {

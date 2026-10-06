@@ -146,9 +146,10 @@ public final class FeishuKitModule extends XposedModule {
         }
         super.onHotReloaded(param);
         // 06 文档 §4.4 现代入口初始化：bind + ModulePath（AntiRecall/ResignTracker 抽 so、
-        // 签名校验都依赖）。业务分发不在此时执行：reload 得以发生 = 旧代没装过任何 hook
-        //（门控保证），不存在需要补装的既有目标；reload 后才加载的包照常触发本代
-        // onPackageReady 完整分发。
+        // 签名校验都依赖）。业务分发不在此时执行：本代已无条件拒绝 reload（onHotReloading），
+        // 本入口正常不可达，保留为防御性契约；即便框架异常强制换代，reload 也不会重放包
+        // 回调，已分发的包无法在此补装——reload 后才加载的包照常触发本代 onPackageReady
+        // 完整分发。
         ModulePath.apply(this);
         ModuleLog.log("onHotReloaded: new generation ready, safety=" + HotReloadSafety.describe());
     }

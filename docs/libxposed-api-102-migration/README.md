@@ -3,7 +3,7 @@
 - **项目**：FeishuKit / `com.chekayo.feishuantirecall`
 - **目标**：从 legacy Xposed API 迁移到 libxposed API 102
 - **文档日期**：2026-10-05
-- **当前状态**：阶段 0~7 已完成且审计通过（阶段 7 见 `records/phase-7/`：LSPosed v2.2.1 真机真实加载 API 102 modern 模块，机器侧＋两轮行为矩阵全部通过，hot reload 真机协商拒绝；两项已知现象定性为与 legacy 等价的基线行为；审计方登记非阻塞风险：native so 可写路径加载的 Android 未来版本兼容性，需在阶段 8 PR 说明或独立议题跟进）。**2026-10 分支代码审计发现的 5 项 P2 问题已修复（`fae6bcb` + 第二轮复审收紧：F1 异常时重复调用原方法 / F2 热重载门控——放行路径存在不可关闭的并发窗口，`onHotReloading` 改为无条件拒绝 / F3 固定作用域阻断白标 / F4 精确反射误挂 / F5 动态 hook ID 冲突，回归见 `records/audit-fixes/`）**；下一阶段：阶段 8 上游 PR（09-upstream-pr.md）
+- **当前状态**：阶段 0~7 已完成且审计通过（阶段 7 见 `records/phase-7/`：LSPosed v2.2.1 真机真实加载 API 102 modern 模块，机器侧＋两轮行为矩阵全部通过，hot reload 真机协商拒绝；两项已知现象定性为与 legacy 等价的基线行为；审计方登记非阻塞风险：native so 可写路径加载的 Android 未来版本兼容性，需在阶段 8 PR 说明或独立议题跟进）。**2026-10 分支代码审计 5 项 P2 已两轮修复并复审通过（`fae6bcb`+`ff3245e`：F1 异常时重复调用原方法 / F2 热重载门控收紧为 onHotReloading 无条件拒绝 / F3 固定作用域阻断白标 / F4 精确反射误挂 / F5 动态 hook ID 冲突，另修复审 P3 测试隔离缺陷；回归见 `records/audit-fixes/`，审计修复轨道关闭）**；下一阶段：阶段 8 上游 PR（09-upstream-pr.md；需对新产物完成构建、元数据核验与必要真机回归）
 - **适用分支**：从当前 `main` 分支创建迁移分支
 
 ## 1. 目标与边界
