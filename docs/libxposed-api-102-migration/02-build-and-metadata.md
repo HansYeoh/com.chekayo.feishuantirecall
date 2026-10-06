@@ -80,10 +80,15 @@ com.larksuite.suite
 ```properties
 minApiVersion=102
 targetApiVersion=102
-staticScope=true
+staticScope=false
 exceptionMode=protective
 autoHotReload=true
 ```
+
+`staticScope=false`（动态作用域）：`scope.list` 只作为默认推荐包（国内版 + 国际版），
+用户仍可按既有流程手动勾选企业白标应用。2026-10 审计 F3 修复：早期迁移版曾声明
+`staticScope=true`，遵循固定作用域的管理器会阻止用户添加白标包，代码内保留的
+`AntiRecall.isLarkApp` 白标探测也没有执行机会，与既有支持范围及框架契约冲突。
 
 `autoHotReload=true` 只代表允许框架触发 reload 流程，实际是否放行由 `onHotReloading()` 决定。当前版本必须 fail-closed，详见 [阶段 5](06-hot-reload.md)。
 

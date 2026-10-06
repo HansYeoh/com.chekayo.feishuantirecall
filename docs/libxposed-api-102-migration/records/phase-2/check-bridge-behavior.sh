@@ -44,14 +44,15 @@ echo "android.jar = $ANDROID_JAR"
 [ -f "$AAR" ] || fail "AAR missing: $AAR"
 unzip -p "$AAR" classes.jar > "$WORK/classes.jar" || fail "extract classes.jar"
 
+# 全量 app 源码 + 本测试：ModulePath 依赖 AntiRecall/ResignTracker（阶段3+ 引入），
+# 桥接层验证入口必须随生产代码依赖面同步扩为全源码编译（2026-10 审计修复：原脚本只编译
+# 桥接五类，ModulePath 新增直接依赖后编译失败，验证入口失效）。
+# 注意源码根是 $APP（含 feishuantirecall + larkresign 两个包），$BRIDGE 只是其中之一。
+APP="$REPO/app/src/main/java"
 "$JAVAC" -encoding UTF-8 \
   -cp "$WORKJ/classes.jar$SEP$ANDROID_JAR" \
   -d "$WORKJ/out" \
-  "$BRIDGE/ModuleRuntime.java" \
-  "$BRIDGE/ModuleLog.java" \
-  "$BRIDGE/Reflect.java" \
-  "$BRIDGE/HookRuntime.java" \
-  "$BRIDGE/ModulePath.java" \
+  $(find "$APP" -name '*.java') \
   "$PHASE2/workbench/HookBridgeBehaviorTest.java" \
   2> "$WORK/javac.err"
 [ $? -ne 0 ] && { cat "$WORK/javac.err" >&2; fail "javac failed"; }

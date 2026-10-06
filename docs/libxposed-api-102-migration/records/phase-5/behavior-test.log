@@ -4,6 +4,7 @@ javac OKï¼ˆæ—  stubsï¼‰
 [PASS] ¸É¾»½ø³ÌÎÞ native hook µÇ¼Ç
 [PASS] ¸É¾»½ø³ÌÎÞÏß³Ì/ÑÓÊ±ÈÎÎñµÇ¼Ç
 [PASS] ¸É¾»½ø³ÌÎÞÍâ²¿»Øµ÷µÇ¼Ç
+[PASS] ¸É¾»½ø³ÌÎÞ Java hook µÇ¼Ç
 [PASS] describe ¸É¾»Ì¬ = (clean)
 [PASS] ÎÞ teardown-unsafe ×ÊÔ´Ê± onHotReloading ·µ»Ø true
 [PASS] ·ÅÐÐÊ±ÏòÐÂÒ»´ú´«ÃÅ¿Ø½áÂÛ£¨ÇÒÖ»´«Ò»´Î£©
@@ -26,7 +27,7 @@ javac OKï¼ˆæ—  stubsï¼‰
 [PASS] describe ·Ö×éÁÐ³öÈýÀà×ÊÔ´: native=[resigntracker.native-inline] threads=[lark-resign-boot] callbacks=[download-mirror.file-observer]
 [PASS] ¾Ü¾øÂ·¾¶²»Ð´ savedState
 [PASS] ÐÂ´ú onHotReloaded Íê³ÉÔËÐÐÊ±°ó¶¨
-[PASS] »»´úºó generation id ¸üÐÂ: d779fb30-2b1f-4ca4-a0ec-8192c84509aa -> 3dac2133-b349-4b36-a84d-417c06282014
+[PASS] »»´úºó generation id ¸üÐÂ: 5ae8947f-bb05-4a0b-9152-7fccbe573c1b -> d85a4a1a-4da4-40a3-8504-19227bce686b
 [PASS] ¾É handle È«Á¿ÇÒ¸÷Ç¡ºÃ unhook Ò»´Î£¨¿ò¼ÜÄ¬ÈÏÓïÒå£©
 [PASS] »»´úÈÕÖ¾¼ÇÂ¼ÐÂ´ú id/savedState/¾É handle Êý
 [PASS] ÖðÌõ¼ÇÂ¼¾É handle id
@@ -41,13 +42,20 @@ javac OKï¼ˆæ—  stubsï¼‰
 [PASS] bind Ê§°Ü·ÖÖ§ÎÞÈÎºÎÒµÎñ³õÊ¼»¯
 [PASS] Í¬ loader ¿ç´ú bind ÈÔ±»¾Ü£¨·À¾É´ú¸´»î£©
 [PASS] ¿ç´ú¾Ü¾øÒÑ¼ÇÈÕÖ¾
-[PASS] ¸É¾»¿ìÕÕ£ºisClean ÓëÈýÀà²¼¶û¡¢describe ÈýÕßÒ»ÖÂ
+[PASS] ¸É¾»¿ìÕÕ£ºisClean ÓëËÄÀà²¼¶û¡¢describe ÈýÕßÒ»ÖÂ
 [PASS] ¿ìÕÕ²»¿É±ä£ºµÇ¼Ç²»Ó°ÏìÒÑ·¢³öµÄ¿ìÕÕ£¨µãÊ±ÓïÒå£©
 [PASS] µÇ¼ÇºóÐÂ¿ìÕÕÈçÊµ·´Ó³Àà±ðÓë×ÊÔ´Ãû
-[PASS] isClean ºãµÈÓÚÈýÀà²¼¶ûÖ®»òµÄ·Ç
+[PASS] isClean ºãµÈÓÚËÄÀà²¼¶ûÖ®»òµÄ·Ç
 [PASS] ²¢·¢Ñ¹Á¦ÏÂ 2 Íò´Î¿ìÕÕÈ«²¿×ÔÇ¢£¨violations=0£©
 [PASS] Ð´Ïß³Ì½áÊøºóÑÓÊ±ÈÎÎñ¼ÆÊý¹éÁã¡¢»Øµ½¸É¾»Ì¬
-[PASS] ²¢·¢ÏÂÈë¿ÚÃÅ¿Ø 8 ´Î¾ö²ßÎÈ¶¨ÇÒ¾Ü¾ø±Ø¼ÇÈÕÖ¾£¨accepts=4 rejects=4£©
+[PASS] ²¢·¢ÏÂÈë¿ÚÃÅ¿Ø 8 ´Î¾ö²ßÎÈ¶¨ÇÒ¾Ü¾ø±Ø¼ÇÈÕÖ¾£¨accepts=5 rejects=3£©
 [PASS] ÒÑ·¢²¼µÄÍâ²¿»Øµ÷µÇ¼ÇÔÚ 500 ´ÎÅÐ¶¨ÖÐÁãÂ©¼ì
 [PASS] ÇåÀíºóÃÅ¿Ø»Ö¸´·ÅÐÐ
+[PASS] ÕæÊµ·Ö·¢ÒÑ×° Java hook£¨installed=14£©
+[PASS] Æô¶¯´°¿Ú¸´¿Ì£º½ö java-hooks ÀàµÇ¼Ç£¬ÆäÓàÈýÀàÈ«¿Õ
+[PASS] describe ÁÐ³ö java-hooks ·Ö×é: java-hooks=[installed-java-hooks,dispatch-begun]
+[PASS] ÒÑ×° Java hook µÄ½ø³ÌÇëÇó reload ¾Ü¾ø£¨Éó¼Æ F2£©
+[PASS] ·Ö·¢¿ªÊ¼µ«Áã hook °²×°³É¹¦£ºdispatch-begun µÇ¼ÇÈÔÔÚ
+[PASS] ·Ö·¢¿ªÊ¼¹ýµ«Áã hook µÄ½ø³ÌÍ¬Ñù¾Ü¾ø reload£¨fail-closed£©
+[PASS] Çå¿ÕµÇ¼Ç£¨Ä£Äâ»»´ú£©ºó»Ö¸´·ÅÐÐ
 == PASS£ºÈ«²¿ hot reload °²È«ÃÅ¿Ø¶ÏÑÔÍ¨¹ý ==

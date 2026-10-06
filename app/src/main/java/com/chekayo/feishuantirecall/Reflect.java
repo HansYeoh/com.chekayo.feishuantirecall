@@ -17,8 +17,10 @@ import java.util.Map;
  *
  * 语义对齐 legacy：
  * - 一律使用调用方传入的目标应用 ClassLoader，绝不退回模块自身 ClassLoader 查目标类；
- * - 方法/字段查找沿父类上溯（callMethod 的 best-match 与 legacy 一致）；
- * - 参数匹配处理 primitive 装箱与加宽（int→long 等）以及 null 实参（只匹配引用型形参）；
+ * - 精确 hook 定位（findMethodExact）只在目标类 declared 成员里按 Class 身份严格匹配，
+ *   不上溯、不混淆 primitive 与包装类（与 legacy findAndHookMethod 一致，审计 F4 后明确）；
+ * - callMethod/callStaticMethod 的 best-match 沿父类上溯（与 legacy 一致），参数匹配处理
+ *   primitive 装箱与加宽（int→long 等）以及 null 实参（只匹配引用型形参）；
  * - InvocationTargetException 解包为原始原因后抛出；找不到成员抛带目标类/方法信息的 Error；
  * - 不通过字符串反射调用任何 legacy Xposed API。
  *
@@ -76,44 +78,30 @@ public final class Reflect {
         }
     }
 
-    // ── 精确查找（沿父类上溯） ─────────────────────────────────────────
+    // ── 精确查找（hook 注册用，与 legacy findAndHookMethod 同语义） ────
 
     /**
-     * 等价 legacy 反射工具的 findMethodExact：名字与形参表精确匹配
-     * （primitive 与其包装类视为等价），沿父类上溯。找不到抛 NoSuchMethodException。
+     * 等价 legacy 反射工具的 findMethodExact：只在目标类 declared 成员里找，
+     * 名字与形参表按 Class 身份严格匹配（int 与 Integer 不等价），不沿父类上溯。
+     * 父类上溯 + 装箱等价属于 callMethod 的 best-match 语义；精确 hook 若沿用，
+     * 会在子类不再覆盖目标方法时误挂公共父类实现、或在重载并存时挂错项
+     * （审计 F4），故这里直接委托 getDeclaredMethod。找不到抛 NoSuchMethodException。
      */
     public static Method findMethodExact(Class<?> clazz, String methodName, Class<?>... parameterTypes)
             throws NoSuchMethodException {
-        for (Class<?> c = clazz; c != null; c = c.getSuperclass()) {
-            Method exact = findExactIn(c.getDeclaredMethods(), methodName, parameterTypes);
-            if (exact != null) return exact;
-        }
-        throw new NoSuchMethodException(sigString(clazz, methodName, parameterTypes));
-    }
-
-    private static Method findExactIn(Method[] methods, String methodName, Class<?>[] parameterTypes) {
-        for (Method m : methods) {
-            if (!m.getName().equals(methodName)) continue;
-            if (!paramsExact(m.getParameterTypes(), parameterTypes)) continue;
-            return m;
-        }
-        return null;
-    }
-
-    private static boolean paramsExact(Class<?>[] declared, Class<?>[] wanted) {
-        if (declared.length != wanted.length) return false;
-        for (int i = 0; i < declared.length; i++) {
-            Class<?> d = declared[i], w = wanted[i];
-            if (d == w) continue;
-            boolean boxEq = d.isPrimitive()
-                    ? BOX.get(d) == w
-                    : (w.isPrimitive() && BOX.get(w) == d);
-            if (!boxEq) return false;
-        }
-        return true;
+        return clazz.getDeclaredMethod(methodName, parameterTypes);
     }
 
     // ── 按签名枚举 declared 成员（不沿父类，供 hookAll* 保持 legacy 语义） ──
+
+    /** 形参表按 Class 身份严格比较（int 与 Integer 不等价，同 {@link #findMethodExact}）。 */
+    private static boolean paramsExact(Class<?>[] declared, Class<?>[] wanted) {
+        if (declared.length != wanted.length) return false;
+        for (int i = 0; i < declared.length; i++) {
+            if (declared[i] != wanted[i]) return false;
+        }
+        return true;
+    }
 
     /**
      * 枚举本类 declared methods，形参通配（hookAllMethods 的规范入口，数量 == 名字匹配的

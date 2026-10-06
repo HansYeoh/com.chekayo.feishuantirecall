@@ -21,8 +21,10 @@ import io.github.libxposed.api.XposedInterface;
  *
  * 统一保证（业务类不得自建重复检测）：
  * - 每个 handle 以 process + package + ClassLoader identity + logicalId 幂等，
- *   重复安装不报错、只告警并返回既有记录；
+ *   同一 Executable 重复安装不报错、只告警并返回既有记录；同键不同 Executable
+ *   视为 ID 配置冲突，抛 IllegalStateException 报出来（审计 F5）；
  * - 每个 handle 连同元数据登记在 REGISTRY，供卸载 / 同 ID 原子替换 / reload 诊断 / 测试期查重；
+ *   首次安装即在安装锁内登记不可热重载（HotReloadSafety.markJavaHook，审计 F2）；
  * - 异常模式不在 per-hook 覆盖，跟随 module.prop 的 exceptionMode=protective 单一来源。
  */
 public final class HookRuntime {
@@ -31,6 +33,13 @@ public final class HookRuntime {
     private static final Object INSTALL_LOCK = new Object();
 
     private HookRuntime() {}
+
+    /**
+     * 安装互斥锁：hot reload 门控判定（FeishuKitModule.onHotReloading）必须先持有它再取
+     * 安全快照，使「判定」与「安装」串行化（审计 F2）。锁序恒为 installLock → HotReloadSafety
+     * 的内部锁，不存在反向获取路径。
+     */
+    static Object installLock() { return INSTALL_LOCK; }
 
     /** 一条已安装 hook 的统一登记记录。 */
     public static final class InstalledHook {
@@ -87,27 +96,31 @@ public final class HookRuntime {
             apiHandle = h.replaceHook(hooker);
             return this;
         }
+    }
 
-        private static String sig(Executable e) {
-            StringBuilder sb = new StringBuilder(e.getDeclaringClass().getName()).append('#');
-            if (e instanceof Method) sb.append(((Method) e).getName());
-            else if (e instanceof Constructor) sb.append("<init>");
-            sb.append('(');
-            Class<?>[] ps = e.getParameterTypes();
-            for (int i = 0; i < ps.length; i++) {
-                if (i > 0) sb.append(',');
-                sb.append(ps[i].getName());
-            }
-            return sb.append(')').toString();
+    /** 「声明类#名(参数类型)」人类可读签名，登记与冲突诊断用。 */
+    private static String sig(Executable e) {
+        StringBuilder sb = new StringBuilder(e.getDeclaringClass().getName()).append('#');
+        if (e instanceof Method) sb.append(((Method) e).getName());
+        else if (e instanceof Constructor) sb.append("<init>");
+        sb.append('(');
+        Class<?>[] ps = e.getParameterTypes();
+        for (int i = 0; i < ps.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(ps[i].getName());
         }
+        return sb.append(')').toString();
     }
 
     // ── 核心 ────────────────────────────────────────────────────────────
 
     /**
      * 对已解析的 Method/Constructor 安装拦截器，登记并返回记录。
-     * 重复（process+package+ClassLoader+logicalId 命中）时告警并返回既有记录，不重复安装。
-     * @throws IllegalStateException 未绑定 ModuleRuntime（说明在入口生命周期之外调用）
+     * 重复（process+package+ClassLoader+logicalId 命中且 Executable 相同）时告警并返回既有记录，
+     * 不重复安装；同键但 Executable 不同视为 logicalId 配置冲突，抛 IllegalStateException
+     * 报出来而不是静默复用（审计 F5：不同声明类的同名方法曾被当成重复漏装还照常计数）。
+     * @throws IllegalStateException 未绑定 ModuleRuntime（在入口生命周期之外调用），
+     *         或 logicalId 与既有登记绑定了不同 Executable（ID 冲突）
      */
     public static InstalledHook hook(Executable target, String logicalId, XposedInterface.Hooker hooker) {
         XposedInterface module = ModuleRuntime.module();
@@ -118,10 +131,21 @@ public final class HookRuntime {
         synchronized (INSTALL_LOCK) {
             InstalledHook prev = REGISTRY.get(key);
             if (prev != null) {
+                // Executable 不保证同一底层方法返回同一实例（getDeclaredMethods 每次新建），
+                // 必须用 equals（声明类+名字+形参表）比较；引用比较会把幂等重装误判为冲突。
+                if (!prev.getExecutable().equals(target)) {
+                    throw new IllegalStateException("HookRuntime: id conflict " + logicalId
+                            + " already bound to " + prev.getSignature()
+                            + ", refusing " + sig(target));
+                }
                 ModuleLog.log("HookRuntime: skip duplicate install " + logicalId
                         + " -> " + prev.getSignature());
                 return prev;
             }
+            // 本代装过任何 Java hook 即登记不可热重载（审计 F2）：登记发生在安装锁内、
+            // hook 对框架可见之前，与 onHotReloading 的门控判定互斥，启动窗口内不可能
+            // 「查完干净 -> 并发装 hook -> 仍放行」。
+            HotReloadSafety.markJavaHook("installed-java-hooks");
             XposedInterface.HookHandle api = module.hook(target)
                     .setId(key)
                     .intercept(hooker);

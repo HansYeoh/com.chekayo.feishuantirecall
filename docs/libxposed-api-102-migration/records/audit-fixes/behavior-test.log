@@ -1,0 +1,27 @@
+== å®¡è®¡ä¿®å¤å›å½’éªŒè¯ï¼ˆå®¿ä¸» JVMï¼‰ ==
+android.jar = C:/Users/Weirdo/AppData/Local/Android/Sdk/platforms/android-37.0/android.jar
+F3 metadata OKï¼ˆstaticScope=false + é»˜è®¤æ¨è scope ä¸å˜ï¼‰
+javac OKï¼ˆæ—  stubsï¼‰
+[PASS] ÕæÊµ·Ö·¢ÒÑ×° hook£¨installed=19£©
+[PASS] Æô¶¯´°¿ÚĞÎÌ¬£º½ö java-hooks µÇ¼Ç£¬native/Ïß³Ì/½ÓÊÕÆ÷È«¿Õ
+[PASS] describe ÁĞ³ö java-hooks ·Ö×é: java-hooks=[installed-java-hooks,dispatch-begun]
+[PASS] F2: ÒÑ×° hook¡¢½ÓÊÕÆ÷Î´×¢²áµÄ½ø³ÌÇëÇó reload ¾Ü¾ø
+[PASS] F2: Çå¿ÕµÇ¼Ç£¨Ä£Äâ»»´ú£©ºó»Ö¸´·ÅĞĞ
+[PASS] F2: Áã hook °²×°³É¹¦µ« dispatch-begun µÇ¼ÇÈÔÔÚ
+[PASS] F2: ·Ö·¢¿ªÊ¼¹ıµ«Áã hook µÄ½ø³Ì¾Ü¾ø reload
+[PASS] F1 Ç°ÖÃ: ²¶»ñµ½Éú²ú addView hooker
+[PASS] F1: addView ¿ª¹Ø¹Ø¡ª¡ªËŞÖ÷Òì³£ÉÏÅ×ÇÒÔ­·½·¨Ö»Ö´ĞĞÒ»´Î£¨Òì³£Ô­ÑùÉÏÅ×=true, proceedCalls=1£©
+[PASS] F1 Ç°ÖÃ: ²¶»ñµ½Éú²ú setVisibility hooker
+[PASS] F1: setVisibility ¿ª¹Ø¹Ø¡ª¡ªËŞÖ÷Òì³£ÉÏÅ×ÇÒÔ­·½·¨Ö»Ö´ĞĞÒ»´Î£¨Òì³£Ô­ÑùÉÏÅ×=true, proceedCalls=1£©
+[PASS] F1: ReadReqHook ¶Ì²ÎÊı¹¹Ôì¡ª¡ªËŞÖ÷Òì³£ÉÏÅ×ÇÒÔ­¹¹ÔìÖ»Ö´ĞĞÒ»´Î£¨Òì³£Ô­ÑùÉÏÅ×=true, proceedCalls=1£©
+[PASS] F1: InvokeHook ¿Õ²Î·ÖÖ§¡ª¡ªËŞÖ÷Òì³£ÉÏÅ×ÇÒÔ­µ÷ÓÃÖ»Ö´ĞĞÒ»´Î£¨Òì³£Ô­ÑùÉÏÅ×=true, proceedCalls=1£©
+[PASS] F1: InvokeHook 10000 ÉÚ±ø·ÖÖ§¡ª¡ªËŞÖ÷Òì³£ÉÏÅ×ÇÒÔ­µ÷ÓÃÖ»Ö´ĞĞÒ»´Î£¨Òì³£Ô­ÑùÉÏÅ×=true, proceedCalls=1£©
+[PASS] F1: MapperHook ±»´Û¸Ä·ÖÖ§¡ª¡ªËŞÖ÷Òì³£ÉÏÅ×ÇÒÔ­·½·¨Ö»Ö´ĞĞÒ»´Î£¨Òì³£Ô­ÑùÉÏÅ×=true, proceedCalls=1£©
+[PASS] F4: ×ÓÀàÎ´¸²¸ÇÊ±¾«È·²éÕÒ²»ÉÏËİ£¨²»ÔÙÎó¹Ò Parent.onResume£©
+[PASS] F4: int Óë Integer °´ Class Éí·İÑÏ¸ñÇø·Ö£¬¸÷ÃüÖĞ¸÷µÄÖØÔØ
+[PASS] F4 ÓïÒå±£Áô: callMethod best-match ÈÔ¿Éµ÷¸¸ÀàÉùÃ÷µÄ·½·¨
+[PASS] F5: Á½¸öÊµÏÖÀàµÄÍ¬ÃûÉó¼Æ·½·¨¸÷×°Ò»¸ö hook£¨installed=2£©
+[PASS] F5: Âß¼­ ID º¬ÉùÃ÷Àà+·½·¨Ãû+ĞÎ²Î±í£¬Á½ÌõµÇ¼Ç¶¼¿É²éµ½
+[PASS] F5: Í¬ logicalId °ó¶¨²»Í¬ Executable Å× id conflict: HookRuntime: id conflict auditfix.conflict already bound to com.chekayo.feishuantirecall.AuditFixBehaviorTest$AuditA#auditImageDownload(java.lang.String), refusing com.chekayo.feishuantirecall.AuditFixBehaviorTest$AuditB#auditImageDownload(java.lang.String)
+[PASS] F5 ÓïÒå±£Áô: Í¬¼üÍ¬ Executable ÈÔÃİµÈ·µ»Ø¼ÈÓĞ¼ÇÂ¼
+== PASS£ºÈ«²¿Éó¼ÆĞŞ¸´»Ø¹é¶ÏÑÔÍ¨¹ı ==

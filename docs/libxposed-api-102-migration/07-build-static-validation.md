@@ -103,9 +103,9 @@ Get-Content META-INF/xposed/scope.list
 - 入口类只有一个。
 - `minApiVersion=102`。
 - `targetApiVersion=102`。
-- `staticScope=true`。
+- `staticScope=false`（2026-10 审计 F3 修复：动态作用域，保留企业白标手动勾选支持）。
 - `autoHotReload=true`。
-- scope 只有国内版和国际版包名。
+- scope 为国内版和国际版两个默认推荐包（动态作用域下用户可自行追加）。
 
 ## 7. API 类不应重复打包
 

@@ -21,9 +21,11 @@ import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam;
  *   此时没有目标包 ClassLoader，禁止安装业务 hook；
  * - onPackageReady：唯一完整业务分发入口；onPackageLoaded 只记日志，防止双重分发重复 hook；
  * - onHotReloading：按 {@link HotReloadSafety} 状态门控（06 文档 §2）——本代装过 native
- *   inline hook、模块自有线程或外部回调即 fail-closed 返回 false（这些资源都没有 teardown
- *   能力，放行会让旧代码和新代码叠加运行；配置桥接收器对任意注入进程安装，故所有已完成
- *   分发的进程都会拒绝）；只有什么都没装的注入进程才放行。README §2：声明 autoHotReload=true
+ *   inline hook、模块自有线程、外部回调或任何 Java hook（含已开始业务分发，审计 F2 修复）
+ *   即 fail-closed 返回 false（这些资源都没有 teardown 能力，或卸载后不会重新分发，放行
+ *   会让旧代码和新代码叠加运行/已装功能静默丢失；配置桥接收器对任意注入进程安装，故所有
+ *   已完成分发的进程都会拒绝）；只有什么都没装的注入进程才放行。判定先持
+ *   HookRuntime.installLock，与 hook 安装互斥。README §2：声明 autoHotReload=true
  *   但安全拒绝优先，不宣称完整 reload 支持；
  * - onHotReloaded：新一代唯一生命周期入口（API 102 契约：reload 不重放 onModuleLoaded 与
  *   包回调）——bind 运行时 + 旧 handle 全量 unhook（框架默认实现）+ 补 ModulePath；
@@ -69,6 +71,13 @@ public final class FeishuKitModule extends XposedModule {
         String pkg = param.getPackageName();
         ClassLoader cl = param.getClassLoader();
 
+        // 审计 F2：业务分发一开始（含任意注入进程的配置桥延迟 hook）即登记本代不可热重载。
+        // 真机启动窗口实测约一秒：后台进程已装大量 Java hook、配置桥 callApplicationOnCreate
+        // 后置回调却还没注册 Receiver，旧门控只查 native/线程/外部回调会误判「干净」放行 reload，
+        // 旧 hook 被框架卸载后 onHotReloaded 不重分发，功能静默丢失到进程重启。该登记与
+        // onHotReloading 的门控判定经 HookRuntime.installLock 互斥，竞态空档关闭。
+        HotReloadSafety.markJavaHook("dispatch-begun");
+
         // 跨进程配置桥对任意注入进程安装（legacy handleLoadPackage 先于过滤执行，行为对齐；
         // 幂等由 CONFIG_BRIDGE_INSTALLED 保证）
         AntiRecall.installConfigBridge();
@@ -102,21 +111,26 @@ public final class FeishuKitModule extends XposedModule {
     public boolean onHotReloading(HotReloadingParam param) {
         // 06 文档 §2 第一版策略：任一 teardown-unsafe 资源存在即拒绝（运行在旧代代码里）。
         // native inline hook / 安装与轮询线程 / 配置桥接收器都没有 unhook+dlclose /
-        // 停线程 / unregister 的生命周期，放行 = 旧 hook 与新 hook 叠加、旧线程持有旧代引用。
-        // 判定走单次锁内快照（阶段 5 审计 P1 修复）：三类资源与原因文本在同一次加锁内生成，
-        // 登记线程无法插在「查完一类到返回」之间；快照不可变，决策与理由来自同一瞬间。
-        HotReloadSafety.GateSnapshot safety = HotReloadSafety.inspectReloadSafety();
-        if (!safety.isClean()) {
-            ModuleLog.log("hot reload rejected: runtime is not teardown-safe -> " + safety.describe());
-            return false;
+        // 停线程 / unregister 的生命周期，放行 = 旧 hook 与新 hook 叠加、旧线程持有旧代引用；
+        // 审计 F2 起第四类：本代装过任何 Java hook / 已开始业务分发同样拒绝——Java hook
+        // 虽可被框架卸载，但 onHotReloaded 不会对已分发的包重新分发，放行 = 已装功能静默丢失。
+        // 判定走单次锁内快照（阶段 5 审计 P1 修复）：四类资源与原因文本在同一次加锁内生成；
+        // 且先持 HookRuntime.installLock 再取快照，安装线程无法插在「查完资源到返回放行」
+        // 之间装上新 hook（判定与安装互斥）。快照不可变，决策与理由来自同一瞬间。
+        synchronized (HookRuntime.installLock()) {
+            HotReloadSafety.GateSnapshot safety = HotReloadSafety.inspectReloadSafety();
+            if (!safety.isClean()) {
+                ModuleLog.log("hot reload rejected: runtime is not teardown-safe -> " + safety.describe());
+                return false;
+            }
+            try {
+                // classloader-neutral 字符串：新一代在 onHotReloaded 读到的旧代门控结论（诊断用；
+                // 放行与否的权威是框架只在本回调返回 true 后才换代这一契约本身）
+                param.setSavedInstanceState("feishukit:generation-clean");
+            } catch (Throwable ignored) {}
+            ModuleLog.log("hot reload accepted: generation holds no teardown-unsafe resources");
+            return true;
         }
-        try {
-            // classloader-neutral 字符串：新一代在 onHotReloaded 读到的旧代门控结论（诊断用；
-            // 放行与否的权威是框架只在本回调返回 true 后才换代这一契约本身）
-            param.setSavedInstanceState("feishukit:generation-clean");
-        } catch (Throwable ignored) {}
-        ModuleLog.log("hot reload accepted: generation holds no teardown-unsafe resources");
-        return true;
     }
 
     @Override

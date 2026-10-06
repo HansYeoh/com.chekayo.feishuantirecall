@@ -766,45 +766,49 @@ public class AntiRecall {
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
             // legacy before-hook 只改参不短路: 先取可变副本, 回调异常也不阻断原构造(与
-            // legacy protective 下一致: 已做的修改随 proceed 生效)。
+            // legacy protective 下一致: 已做的修改随 proceed 生效)。模块预处理(改参/日志)
+            // 包在吞异常 try 内; 原构造放行固定在 try 末尾之外恰好一次——短参数路径同样
+            // 落到这一次 proceed 上, 不得出现「proceed 在 catch 内被吞后再放行一次」
+            // (审计 F1: 同一次构造会被执行两遍)。
             Object[] a = chain.getArgs().toArray();
             try {
-                if (a == null || a.length < 8) return chain.proceed(a);
-                boolean inSendWindow = System.currentTimeMillis() < READ_WINDOW;
-                String ch = channelId(a.length > 1 ? a[1] : null);
-                int midsBefore = (a[0] instanceof java.util.List) ? ((java.util.List) a[0]).size() : -1;
+                if (a != null && a.length >= 8) {
+                    boolean inSendWindow = System.currentTimeMillis() < READ_WINDOW;
+                    String ch = channelId(a.length > 1 ? a[1] : null);
+                    int midsBefore = (a[0] instanceof java.util.List) ? ((java.util.List) a[0]).size() : -1;
 
-                if (Config.antiread && TAMPER != 2) {
-                    if (inSendWindow) {
-                        // 回复窗口内: 放行, 并把该会话浏览时暂存的 message_ids 补回去(安卓回复只带
-                        //   max_position 不带 ids, 不补则对方仍未读) -> 对方看到你已读可视消息。
-                        java.util.LinkedHashSet<String> buf = PENDING_READ.remove(ch);
-                        if (a[0] instanceof java.util.List) {
-                            java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<String>();
-                            if (buf != null) merged.addAll(buf);
-                            for (Object o : (java.util.List) a[0]) if (o instanceof String) merged.add((String) o);
-                            a[0] = new java.util.ArrayList<String>(merged);
+                    if (Config.antiread && TAMPER != 2) {
+                        if (inSendWindow) {
+                            // 回复窗口内: 放行, 并把该会话浏览时暂存的 message_ids 补回去(安卓回复只带
+                            //   max_position 不带 ids, 不补则对方仍未读) -> 对方看到你已读可视消息。
+                            java.util.LinkedHashSet<String> buf = PENDING_READ.remove(ch);
+                            if (a[0] instanceof java.util.List) {
+                                java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<String>();
+                                if (buf != null) merged.addAll(buf);
+                                for (Object o : (java.util.List) a[0]) if (o instanceof String) merged.add((String) o);
+                                a[0] = new java.util.ArrayList<String>(merged);
+                            }
+                        } else {
+                            // 纯浏览: 暂存被抑制的 message_ids(按会话, 上限500), 再清空本次上报。
+                            if (a[0] instanceof java.util.List && !((java.util.List) a[0]).isEmpty()) {
+                                java.util.LinkedHashSet<String> buf = PENDING_READ.get(ch);
+                                if (buf == null) { buf = new java.util.LinkedHashSet<String>(); PENDING_READ.put(ch, buf); }
+                                for (Object o : (java.util.List) a[0]) if (o instanceof String) buf.add((String) o);
+                                java.util.Iterator<String> it = buf.iterator();
+                                while (buf.size() > 500 && it.hasNext()) { it.next(); it.remove(); }
+                                a[0] = new java.util.ArrayList<String>();
+                            }
+                            if (a[7] instanceof java.util.List) a[7] = new java.util.ArrayList<Long>();     // fold_ids
                         }
-                    } else {
-                        // 纯浏览: 暂存被抑制的 message_ids(按会话, 上限500), 再清空本次上报。
-                        if (a[0] instanceof java.util.List && !((java.util.List) a[0]).isEmpty()) {
-                            java.util.LinkedHashSet<String> buf = PENDING_READ.get(ch);
-                            if (buf == null) { buf = new java.util.LinkedHashSet<String>(); PENDING_READ.put(ch, buf); }
-                            for (Object o : (java.util.List) a[0]) if (o instanceof String) buf.add((String) o);
-                            java.util.Iterator<String> it = buf.iterator();
-                            while (buf.size() > 500 && it.hasNext()) { it.next(); it.remove(); }
-                            a[0] = new java.util.ArrayList<String>();
-                        }
-                        if (a[7] instanceof java.util.List) a[7] = new java.util.ArrayList<Long>();     // fold_ids
                     }
-                }
 
-                int c = READ_LOG_COUNT.incrementAndGet();
-                if (c <= 200) {
-                    int midsAfter = (a[0] instanceof java.util.List) ? ((java.util.List) a[0]).size() : -1;
-                    alog("READ_REQ #" + c + " ch=" + ch + " ids:" + midsBefore + "->" + midsAfter
-                            + " maxPos=" + a[2] + " sendWin=" + inSendWindow
-                            + (Config.antiread ? (inSendWindow ? " 放行(回复,补" + midsAfter + "条)" : " 清空(浏览,暂存)") : " 仅记录"));
+                    int c = READ_LOG_COUNT.incrementAndGet();
+                    if (c <= 200) {
+                        int midsAfter = (a[0] instanceof java.util.List) ? ((java.util.List) a[0]).size() : -1;
+                        alog("READ_REQ #" + c + " ch=" + ch + " ids:" + midsBefore + "->" + midsAfter
+                                + " maxPos=" + a[2] + " sendWin=" + inSendWindow
+                                + (Config.antiread ? (inSendWindow ? " 放行(回复,补" + midsAfter + "条)" : " 清空(浏览,暂存)") : " 仅记录"));
+                    }
                 }
             } catch (Throwable ignore) {
             }
@@ -820,33 +824,38 @@ public class AntiRecall {
     static class InvokeHook implements XposedInterface.Hooker {
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
+            // 模块预处理(读参/诊断/判定是否丢包)包在吞异常 try 内; 原调用放行固定在 try 外
+            // 恰好一次(审计 F1: 各提前放行分支的 proceed 曾处于 catch 内, 异常被吞后原调用
+            // 会被再执行一次)。唯一短路是 legacy setResult(null) 等价的丢包分支。
+            boolean drop = false;
             try {
                 Object[] args = chain.getArgs().toArray();
-                if (args == null || args.length == 0) return chain.proceed(args);
-                Object a0 = args[0];
-                int cmd;
-                if (a0 instanceof Integer) {
-                    cmd = (Integer) a0;
-                } else if (a0 != null) {
-                    // Command 对象 -> getValue()
-                    try { cmd = (Integer) Reflect.callMethod(a0, "getValue"); }
-                    catch (Throwable t) { return chain.proceed(args); }   // 不是 Command, 跳过
-                } else return chain.proceed(args);
-                if (cmd == 10000) return chain.proceed(args);             // native 包装哨兵噪音, 忽略
-                // 诊断: 记录命令(限量), 找开聊天触发的读命令
-                int c = INVOKE_LOG_COUNT.incrementAndGet();
-                if (c <= 4000) {
-                    alog("invoke cmd=" + cmd
-                            + (isWatched(cmd) ? " *READ*" : "")
-                            + (cmd == CMD_UPDATE_MESSAGES_ME_READ ? " <UPDATE_MESSAGES_ME_READ>" : ""));
-                }
-                if (ANTIREAD_DROP && cmd == CMD_UPDATE_MESSAGES_ME_READ) {
-                    alog("DROPPED UPDATE_MESSAGES_ME_READ");
-                    return null;   // legacy setResult(null) 短路
+                if (args != null && args.length > 0) {
+                    Object a0 = args[0];
+                    Integer cmd = null;
+                    if (a0 instanceof Integer) {
+                        cmd = (Integer) a0;
+                    } else if (a0 != null) {
+                        // Command 对象 -> getValue(); 解析失败视为非 Command, 跳过处理
+                        try { cmd = (Integer) Reflect.callMethod(a0, "getValue"); } catch (Throwable t) { cmd = null; }
+                    }
+                    if (cmd != null && cmd != 10000) {                        // native 包装哨兵噪音, 忽略
+                        // 诊断: 记录命令(限量), 找开聊天触发的读命令
+                        int c = INVOKE_LOG_COUNT.incrementAndGet();
+                        if (c <= 4000) {
+                            alog("invoke cmd=" + cmd
+                                    + (isWatched(cmd) ? " *READ*" : "")
+                                    + (cmd == CMD_UPDATE_MESSAGES_ME_READ ? " <UPDATE_MESSAGES_ME_READ>" : ""));
+                        }
+                        if (ANTIREAD_DROP && cmd == CMD_UPDATE_MESSAGES_ME_READ) {
+                            alog("DROPPED UPDATE_MESSAGES_ME_READ");
+                            drop = true;   // legacy setResult(null) 短路
+                        }
+                    }
                 }
             } catch (Throwable ignore) {
             }
-            return chain.proceed();
+            return drop ? null : chain.proceed();
         }
     }
 
@@ -866,22 +875,28 @@ public class AntiRecall {
 
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
+            // before 反射改对象, 不短路: 原方法必须执行恰好一次。预处理包在吞异常 try 内,
+            // proceed 固定在 try 外一次(审计 F1: 被篡改/空参等提前返回分支的 proceed 曾
+            // 处于 catch 内, 异常被吞后原方法会被再执行一次)。
             try {
-                if (TAMPER == 2) return chain.proceed();   // 被篡改则不还原撤回内容
-                Object mi = chain.getArgs().get(0);
-                if (mi == null) return chain.proceed();
-                Object m = Reflect.callMethod(mi, "getMessage");
-                if (m == null) return chain.proceed();
-                String id = String.valueOf(Reflect.callMethod(m, "getId"));
-                Object c = Reflect.callMethod(m, "getContent");
-                String t = textOf(c);
-                if (t != null && t.length() > 0) {
-                    CACHE.put(id, c);
-                } else if (CACHE.containsKey(id)) {
-                    Object cached = CACHE.get(id);
-                    Reflect.callMethod(m, "setMessageContent", cached);
-                    if (normal != null) {
-                        try { Reflect.callMethod(m, "setStatus", normal); } catch (Throwable ignore) {}
+                if (TAMPER != 2) {   // 被篡改则不还原撤回内容, 仅放行
+                    Object mi = chain.getArgs().get(0);
+                    if (mi != null) {
+                        Object m = Reflect.callMethod(mi, "getMessage");
+                        if (m != null) {
+                            String id = String.valueOf(Reflect.callMethod(m, "getId"));
+                            Object c = Reflect.callMethod(m, "getContent");
+                            String t = textOf(c);
+                            if (t != null && t.length() > 0) {
+                                CACHE.put(id, c);
+                            } else if (CACHE.containsKey(id)) {
+                                Object cached = CACHE.get(id);
+                                Reflect.callMethod(m, "setMessageContent", cached);
+                                if (normal != null) {
+                                    try { Reflect.callMethod(m, "setStatus", normal); } catch (Throwable ignore) {}
+                                }
+                            }
+                        }
                     }
                 }
             } catch (Throwable ignore) {

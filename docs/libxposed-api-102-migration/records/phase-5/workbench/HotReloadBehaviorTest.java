@@ -15,7 +15,8 @@ import java.util.concurrent.CountDownLatch;
 
 /**
  * 阶段 5 行为验证：hot reload 安全门控 + 新一代入口接线（宿主 JVM 直跑，06 文档）。
- * 覆盖：§2 三类资源门控（native/线程/外部回调任一存在即拒绝，全干净才放行）、
+ * 覆盖：§2 四类资源门控（native/线程/外部回调/已装 Java hook 任一存在即拒绝，全干净才放行；
+ * 第四类为 2026-10 审计 F2 修复——启动窗口内「已装 hook、配置桥接收器未注册」曾被误判干净）、
  * §3 状态表语义（闩幂等、延时任务计数到 0 归零、重复 end 不为负）、
  * §4 新一代入口（bind 接线 + 旧 handle 全量 unhook + ModulePath 补路径 + 不做业务分发）、
  * bind 失败 fail-closed（仅清旧 handle）、reload 后新加载的包照常完整分发。
@@ -89,6 +90,22 @@ public class HotReloadBehaviorTest {
         public XposedInterface.HookHandle replaceHook(XposedInterface.Hooker h) { return this; }
     }
 
+    /** 支持真实安装的伪造框架：记录安装次数（审计 F2 断言用，其余行为同 FakeXposed）。 */
+    static class HookingXposed extends FakeXposed {
+        int installed = 0;
+        public XposedInterface.HookBuilder hook(final java.lang.reflect.Executable target) {
+            return new XposedInterface.HookBuilder() {
+                public XposedInterface.HookBuilder setPriority(int p) { return this; }
+                public XposedInterface.HookBuilder setExceptionMode(XposedInterface.ExceptionMode m) { return this; }
+                public XposedInterface.HookBuilder setId(String id) { return this; }
+                public XposedInterface.HookHandle intercept(XposedInterface.Hooker h) {
+                    installed++;
+                    return new FakeHandle("hook#" + installed);
+                }
+            };
+        }
+    }
+
     static class FakeReloadedParam implements HotReloadedParam {
         final String process;
         final List<XposedInterface.HookHandle> handles;
@@ -143,10 +160,11 @@ public class HotReloadBehaviorTest {
         AntiRecall.g_lark_mark = null;
         HotReloadSafety.resetForTest();
 
-        // ── 1. 干净状态（06 文档 §2 三类门控全空） ──
+        // ── 1. 干净状态（06 文档 §2 四类门控全空） ──
         check(!HotReloadSafety.hasNativeHooks(), "干净进程无 native hook 登记");
         check(!HotReloadSafety.hasModuleThreads(), "干净进程无线程/延时任务登记");
         check(!HotReloadSafety.hasExternalCallbacks(), "干净进程无外部回调登记");
+        check(!HotReloadSafety.hasJavaHooks(), "干净进程无 Java hook 登记");
         check("(clean)".equals(HotReloadSafety.describe()), "describe 干净态 = (clean)");
 
         // ── 2. 放行路径：门控全空 → true + classloader-neutral 门控结论（06 文档 §2） ──
@@ -266,19 +284,22 @@ public class HotReloadBehaviorTest {
         HotReloadSafety.resetForTest();
         HotReloadSafety.GateSnapshot snapClean = HotReloadSafety.inspectReloadSafety();
         check(snapClean.isClean() && "(clean)".equals(snapClean.describe())
-                && !snapClean.hasNativeHooks() && !snapClean.hasModuleThreads() && !snapClean.hasExternalCallbacks(),
-                "干净快照：isClean 与三类布尔、describe 三者一致");
+                && !snapClean.hasNativeHooks() && !snapClean.hasModuleThreads()
+                && !snapClean.hasExternalCallbacks() && !snapClean.hasJavaHooks(),
+                "干净快照：isClean 与四类布尔、describe 三者一致");
         HotReloadSafety.markNativeHook("p1.native");
         check(snapClean.isClean() && "(clean)".equals(snapClean.describe()),
                 "快照不可变：登记不影响已发出的快照（点时语义）");
         HotReloadSafety.GateSnapshot snapMarked = HotReloadSafety.inspectReloadSafety();
         check(!snapMarked.isClean() && snapMarked.hasNativeHooks()
                 && !snapMarked.hasModuleThreads() && !snapMarked.hasExternalCallbacks()
+                && !snapMarked.hasJavaHooks()
                 && snapMarked.describe().contains("p1.native"),
                 "登记后新快照如实反映类别与资源名");
         check(snapMarked.isClean() == !(snapMarked.hasNativeHooks()
-                || snapMarked.hasModuleThreads() || snapMarked.hasExternalCallbacks()),
-                "isClean 恒等于三类布尔之或的非");
+                || snapMarked.hasModuleThreads() || snapMarked.hasExternalCallbacks()
+                || snapMarked.hasJavaHooks()),
+                "isClean 恒等于四类布尔之或的非");
 
         // ── 14. 并发回归：完整门控判定期间的登记不错误放行（审计 P1） ──
         // 两个写线程在门控判定全程反复 begin/end 延时任务（唯一可能的瞬态资源），
@@ -304,8 +325,9 @@ public class HotReloadBehaviorTest {
         int rejectLogBefore = logCount("hot reload rejected");
         for (int i = 0; i < 20000; i++) {
             HotReloadSafety.GateSnapshot s = HotReloadSafety.inspectReloadSafety();
-            boolean cats = s.hasNativeHooks() || s.hasModuleThreads() || s.hasExternalCallbacks();
-            if (s.isClean() == cats) violations++;                       // isClean 必须与三类布尔互补
+            boolean cats = s.hasNativeHooks() || s.hasModuleThreads() || s.hasExternalCallbacks()
+                    || s.hasJavaHooks();
+            if (s.isClean() == cats) violations++;                       // isClean 必须与四类布尔互补
             if (s.isClean() && !"(clean)".equals(s.describe())) violations++;
             if (!s.isClean() && !s.describe().contains("race.delayed")) violations++;
             if (i % 2500 == 0) {   // 周期性走完整入口门控（决策与原因同源自同一快照）
@@ -342,6 +364,40 @@ public class HotReloadBehaviorTest {
         check(HotReloadSafety.inspectReloadSafety().isClean()
                 && m2.onHotReloading(new RecordingReloadingParam()) == true,
                 "清理后门控恢复放行");
+
+        // ── 15. 审计 F2（2026-10）：本代装过 Java hook / 已开始分发即拒绝（启动窗口竞态关闭） ──
+        // 审计夹具场景：真实分发完成（Java hook 已在册）、配置桥接收器尚未注册、native/线程
+        // 也未启动——原三类门控在此刻误判「干净」放行，框架卸掉旧 hook 后新代不重分发。
+        resetRuntimeForNewGeneration();
+        FeishuKitModule m4 = new FeishuKitModule();
+        HookingXposed hx = new HookingXposed();
+        m4.attachFramework(hx, new Runnable() { public void run() { } });
+        m4.onModuleLoaded(new FakeModuleLoadedParam());
+        m4.onPackageReady(new FakePackageParam(FEISHU, new URLClassLoader(new URL[0], null)));
+        check(hx.installed > 0 && HookRuntime.snapshot().size() == hx.installed,
+                "真实分发已装 Java hook（installed=" + hx.installed + "）");
+        check(HotReloadSafety.hasJavaHooks() && !HotReloadSafety.hasNativeHooks()
+                && !HotReloadSafety.hasModuleThreads() && !HotReloadSafety.hasExternalCallbacks(),
+                "启动窗口复刻：仅 java-hooks 类登记，其余三类全空");
+        check(HotReloadSafety.describe().contains("java-hooks=["),
+                "describe 列出 java-hooks 分组: " + HotReloadSafety.describe());
+        check(m4.onHotReloading(new RecordingReloadingParam()) == false,
+                "已装 Java hook 的进程请求 reload 拒绝（审计 F2）");
+        // 分发即登记的另一面：即使全部 hook 安装都失败（这里 hook() 直接抛异常），
+        // 「分发开始」事实已登记，同样拒绝——fail-closed。
+        HotReloadSafety.resetForTest();
+        resetRuntimeForNewGeneration();
+        FeishuKitModule m5 = new FeishuKitModule();
+        m5.attachFramework(new FakeXposed(), new Runnable() { public void run() { } });
+        m5.onModuleLoaded(new FakeModuleLoadedParam());
+        m5.onPackageReady(new FakePackageParam(FEISHU, new URLClassLoader(new URL[0], null)));
+        check(HotReloadSafety.hasJavaHooks(),
+                "分发开始但零 hook 安装成功：dispatch-begun 登记仍在");
+        check(m5.onHotReloading(new RecordingReloadingParam()) == false,
+                "分发开始过但零 hook 的进程同样拒绝 reload（fail-closed）");
+        HotReloadSafety.resetForTest();
+        check(m5.onHotReloading(new RecordingReloadingParam()) == true,
+                "清空登记（模拟换代）后恢复放行");
 
         System.out.println(failures == 0
                 ? "== PASS：全部 hot reload 安全门控断言通过 =="

@@ -53,20 +53,23 @@ public final class AiPeekBlock {
         try {
             XposedInterface.Hooker addHook = new XposedInterface.Hooker() {
                 @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
-                    // legacy: 条件不命中放行原方法；命中 setResult(null) 拦下 addView(void 短路)
+                    // legacy: 条件不命中放行原方法；命中 setResult(null) 拦下 addView(void 短路)。
+                    // 只有模块自身的判定逻辑允许吞异常；放行/短路在 try 外恰好执行一次——
+                    // proceed 若处于吞异常范围内，宿主异常被吞后原方法会被再执行一次（审计 F1）。
                     Object[] args = chain.getArgs().toArray();
+                    boolean block = false;
                     try {
-                        if (!Config.blockaipeek) return chain.proceed(args);
-                        if (!(args[0] instanceof View)) return chain.proceed(args);
-                        View child = (View) args[0];
-                        // 只拦确认是速览节点本身（含 peek 类名/文案）；shell 隐藏由 setText→hideTipShell 负责
-                        if (isPeekNode(child)) {
-                            markBlocked(child);
-                            hit("addView", "拦下浮层 class=" + child.getClass().getName());
-                            return null;
+                        if (Config.blockaipeek && args.length > 0 && (args[0] instanceof View)) {
+                            View child = (View) args[0];
+                            // 只拦确认是速览节点本身（含 peek 类名/文案）；shell 隐藏由 setText→hideTipShell 负责
+                            if (isPeekNode(child)) {
+                                markBlocked(child);
+                                hit("addView", "拦下浮层 class=" + child.getClass().getName());
+                                block = true;
+                            }
                         }
                     } catch (Throwable ignored) {}
-                    return chain.proceed(args);
+                    return block ? null : chain.proceed(args);
                 }
             };
             try { HookRuntime.hookMethod(ViewGroup.class, "addView", new Class<?>[]{View.class}, "aipeek.addView.1", addHook); } catch (Throwable ignored) {}
@@ -84,19 +87,20 @@ public final class AiPeekBlock {
             HookRuntime.hookMethod(View.class, "setVisibility", new Class<?>[]{int.class}, "aipeek.setVisibility",
                     new XposedInterface.Hooker() {
                 @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
-                    // legacy: 命中后 p.args[0]=GONE 且原方法继续(proceed 改参)
+                    // legacy: 命中后 p.args[0]=GONE 且原方法继续(proceed 改参)。
+                    // 本回调永远放行原方法、只改参；proceed 固定在吞异常的 try 之外恰好一次（审计 F1）。
                     Object[] args = chain.getArgs().toArray();
                     try {
-                        if (!Config.blockaipeek) return chain.proceed(args);
-                        int vis = (Integer) args[0];
-                        if (vis != View.VISIBLE) return chain.proceed(args);
-                        View v = (View) chain.getThisObject();
-                        // 仅拦已被 hideTipShell 标记的节点（由 setText 文案命中后标记）
-                        boolean block = isBlocked(v);
-                        if (!block) return chain.proceed(args);
-                        markBlocked(v);
-                        hit("setVisibility", "强制GONE class=" + v.getClass().getName());
-                        args[0] = View.GONE;
+                        if (Config.blockaipeek && args.length > 0
+                                && Integer.valueOf(View.VISIBLE).equals(args[0])) {
+                            View v = (View) chain.getThisObject();
+                            // 仅拦已被 hideTipShell 标记的节点（由 setText 文案命中后标记）
+                            if (isBlocked(v)) {
+                                markBlocked(v);
+                                hit("setVisibility", "强制GONE class=" + v.getClass().getName());
+                                args[0] = View.GONE;
+                            }
+                        }
                     } catch (Throwable ignored) {}
                     return chain.proceed(args);
                 }

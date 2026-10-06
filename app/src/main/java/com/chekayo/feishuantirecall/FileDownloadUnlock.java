@@ -97,8 +97,7 @@ public class FileDownloadUnlock {
                             if (ps.length != 4) continue;
                             if (ps[0] != String.class || ps[1] != String.class || ps[2] != String.class || ps[3] != String.class) continue;
                             final String mn = m.getName();
-                            final int idx = n;
-                            HookRuntime.hook(m, "dlunlock.audit." + c.getName() + "#" + idx,
+                            HookRuntime.hook(m, auditId("dlunlock.audit", c, m),
                                     new XposedInterface.Hooker() {
                                 @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
                                     if (Config.downloadunlock) {
@@ -169,8 +168,7 @@ public class FileDownloadUnlock {
         for (Method m : c.getDeclaredMethods()) {
             if (m.isSynthetic() || m.isBridge()) continue;
             if (!m.getName().equals(name)) continue;
-            final int idx = n;
-            HookRuntime.hook(m, "dlunlock.svcaudit." + name + "#" + idx, new XposedInterface.Hooker() {
+            HookRuntime.hook(m, auditId("dlunlock.svcaudit", c, m), new XposedInterface.Hooker() {
                 @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
                     if (Config.downloadunlock) {
                         if (Config.diaglog) ModuleLog.log("[fucklark] 已拦下存图/存视频审计上报: " + name
@@ -183,6 +181,22 @@ public class FileDownloadUnlock {
             n++;
         }
         return n;
+    }
+
+    /**
+     * 动态发现实现类的 hook 逻辑 ID：必须含声明类+方法名+形参表。
+     * 旧写法只有「方法名#序号」，服务发现返回两个实现类时第二个生成相同 ID，
+     * 被注册表当成重复漏装、日志却照常计数（审计 F5）。
+     */
+    static String auditId(String prefix, Class<?> c, Method m) {
+        StringBuilder sb = new StringBuilder(prefix).append('.').append(c.getName())
+                .append('#').append(m.getName()).append('(');
+        Class<?>[] ps = m.getParameterTypes();
+        for (int i = 0; i < ps.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(ps[i].getName());
+        }
+        return sb.append(')').toString();
     }
 
     // FileOpenUtils 里唯一的 static、无参、返回 boolean 的方法(不唯一则返回 null, 宁可不 hook 也不 hook 错)

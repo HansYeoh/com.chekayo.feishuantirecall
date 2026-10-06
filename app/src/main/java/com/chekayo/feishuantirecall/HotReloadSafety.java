@@ -12,8 +12,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * 只做登记、不改变任何业务行为：各资源创建点在资源「已创建且无 teardown 能力」时打标，
  * 唯一的消费方是 {@link FeishuKitModule} 的 onHotReloading 门控 —— 存在任一 native inline
- * hook / 模块自有线程 / 外部回调即拒绝 reload（06 文档 §2 第一版策略：module.prop 声明
- * autoHotReload=true 但安全拒绝优先，避免旧代资源与新代代码叠加运行）。
+ * hook / 模块自有线程 / 外部回调 / 已安装的 Java hook 即拒绝 reload（06 文档 §2 第一版策略：
+ * module.prop 声明 autoHotReload=true 但安全拒绝优先，避免旧代资源与新代代码叠加运行）。
+ * 第四类（审计修复）：Java hook 本身虽可被框架卸载，但 onHotReloaded 不会对已分发的包重新
+ * 执行分发——启动窗口内「已装 hook、配置桥接收器尚未注册」的进程曾被误判为干净而放行，
+ * reload 卸掉旧 hook 后功能静默丢失直到进程重启；故本代装过任何 Java hook / 已开始业务
+ * 分发即视为不可热重载（登记与安装经 HookRuntime 的安装锁互斥，见门控判定）。
  *
  * 门控判定必须走 {@link #inspectReloadSafety()}：三类资源与原因文本在同一次加锁内生成
  * 不可变 {@link GateSnapshot}，「查完一类到返回」之间不存在被并发打标穿越的窗口
@@ -31,7 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class HotReloadSafety {
 
     /** 资源类别（延时任务不进本表，单独计数，查询归入线程类）。 */
-    private enum Kind { NATIVE_HOOK, MODULE_THREAD, EXTERNAL_CALLBACK }
+    private enum Kind { NATIVE_HOOK, MODULE_THREAD, EXTERNAL_CALLBACK, JAVA_HOOK }
 
     private static final ConcurrentHashMap<String, Kind> LATCHED = new ConcurrentHashMap<String, Kind>();
     private static final ConcurrentHashMap<String, AtomicInteger> PENDING_TASKS = new ConcurrentHashMap<String, AtomicInteger>();
@@ -47,6 +51,13 @@ public final class HotReloadSafety {
 
     /** 外部回调已注册（BroadcastReceiver / FileObserver 等模块持有的系统回调）。 */
     public static void markExternalCallback(String name) { latch(name, Kind.EXTERNAL_CALLBACK); }
+
+    /**
+     * 本代已装 Java hook / 已开始业务分发（审计 F2 修复）。Java hook 卸载后 onHotReloaded
+     * 不会对已分发的包重新分发，故登记即拒绝 reload；HookRuntime.hook 在安装锁内、任何
+     * hook 可见之前调用，FeishuKitModule.onPackageReady 在分发开始时调用。
+     */
+    public static void markJavaHook(String name) { latch(name, Kind.JAVA_HOOK); }
 
     /** 延时任务入队（postDelayed 等）；任务体须在 finally 里配对 {@link #endDelayedTask}。 */
     public static void beginDelayedTask(String name) {
@@ -82,10 +93,14 @@ public final class HotReloadSafety {
     /** 是否存在已注册的外部回调（06 文档 §2 门控三）。仅诊断/测试用，门控判定走 {@link #inspectReloadSafety()}。 */
     public static boolean hasExternalCallbacks() { return hasKind(Kind.EXTERNAL_CALLBACK); }
 
+    /** 是否已装 Java hook / 已开始业务分发（审计 F2 门控四）。仅诊断/测试用，门控判定走 {@link #inspectReloadSafety()}。 */
+    public static boolean hasJavaHooks() { return hasKind(Kind.JAVA_HOOK); }
+
     /**
      * 一次性完整门控判定（06 文档 §2 的唯一消费入口，onHotReloading 必须只调本方法）。
-     * 三类资源判定与原因文本在同一次加锁内生成，登记线程无法插在「查完一类到返回」之间；
-     * 返回的快照不可变，发出后不受后续登记影响（点时语义）。
+     * 四类资源判定与原因文本在同一次加锁内生成，登记线程无法插在「查完一类到返回」之间；
+     * 返回的快照不可变，发出后不受后续登记影响（点时语义）。调用方需先持有
+     * {@link HookRuntime#installLock()}，使判定与 hook 安装互斥（审计 F2）。
      */
     public static GateSnapshot inspectReloadSafety() {
         synchronized (LOCK) {
@@ -93,26 +108,30 @@ public final class HotReloadSafety {
                     hasKindLocked(Kind.NATIVE_HOOK),
                     hasKindLocked(Kind.MODULE_THREAD) || !PENDING_TASKS.isEmpty(),
                     hasKindLocked(Kind.EXTERNAL_CALLBACK),
+                    hasKindLocked(Kind.JAVA_HOOK),
                     describeLocked());
         }
     }
 
-    /** 门控判定的不可变点时快照：isClean、三类布尔与 describe 来自同一加锁瞬间。 */
+    /** 门控判定的不可变点时快照：isClean、四类布尔与 describe 来自同一加锁瞬间。 */
     public static final class GateSnapshot {
         private final boolean nativeHooks;
         private final boolean moduleThreads;
         private final boolean externalCallbacks;
+        private final boolean javaHooks;
         private final String describe;
 
-        private GateSnapshot(boolean nativeHooks, boolean moduleThreads, boolean externalCallbacks, String describe) {
+        private GateSnapshot(boolean nativeHooks, boolean moduleThreads,
+                             boolean externalCallbacks, boolean javaHooks, String describe) {
             this.nativeHooks = nativeHooks;
             this.moduleThreads = moduleThreads;
             this.externalCallbacks = externalCallbacks;
+            this.javaHooks = javaHooks;
             this.describe = describe;
         }
 
-        /** 三类 teardown-unsafe 资源都不存在时为 true（06 文档 §2 放行条件）。 */
-        public boolean isClean() { return !nativeHooks && !moduleThreads && !externalCallbacks; }
+        /** 四类 teardown-unsafe 资源都不存在时为 true（06 文档 §2 放行条件）。 */
+        public boolean isClean() { return !nativeHooks && !moduleThreads && !externalCallbacks && !javaHooks; }
 
         public boolean hasNativeHooks() { return nativeHooks; }
 
@@ -120,13 +139,15 @@ public final class HotReloadSafety {
 
         public boolean hasExternalCallbacks() { return externalCallbacks; }
 
+        public boolean hasJavaHooks() { return javaHooks; }
+
         /** 判定瞬间的资源清单文本；干净时为 "(clean)"。 */
         public String describe() { return describe; }
     }
 
     /**
      * 人类可读快照：拒绝原因日志与 reload 诊断用。
-     * 全部为空时返回 "(clean)"，否则按 native/threads/callbacks/delayed-tasks 分组列出资源名。
+     * 全部为空时返回 "(clean)"，否则按 native/threads/callbacks/java-hooks 分组列出资源名。
      * 门控判定请改用 {@link #inspectReloadSafety()}（本方法只诊断，不保证与其它查询同窗）。
      */
     public static String describe() {
@@ -135,13 +156,14 @@ public final class HotReloadSafety {
         }
     }
 
-    /** describe 的锁内实现：与 inspectReloadSafety 共用，保证原因文本与三类判定同源同窗。 */
+    /** describe 的锁内实现：与 inspectReloadSafety 共用，保证原因文本与四类判定同源同窗。 */
     private static String describeLocked() {
         if (LATCHED.isEmpty() && PENDING_TASKS.isEmpty()) return "(clean)";
         StringBuilder sb = new StringBuilder();
         appendKind(sb, Kind.NATIVE_HOOK, "native");
         appendKind(sb, Kind.MODULE_THREAD, "threads");
         appendKind(sb, Kind.EXTERNAL_CALLBACK, "callbacks");
+        appendKind(sb, Kind.JAVA_HOOK, "java-hooks");
         if (!PENDING_TASKS.isEmpty()) {
             if (sb.length() > 0) sb.append(' ');
             sb.append("delayed-tasks=[");

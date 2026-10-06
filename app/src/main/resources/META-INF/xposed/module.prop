@@ -6,6 +6,6 @@ author=haikow
 description=FeishuKit：防撤回 / 防已读 / 离职档案。设置在飞书「设置 → 实验室」后的「模块设置」
 minApiVersion=102
 targetApiVersion=102
-staticScope=true
+staticScope=false
 exceptionMode=protective
 autoHotReload=true
