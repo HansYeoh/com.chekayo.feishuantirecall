@@ -711,11 +711,77 @@ public class AntiRecall {
     };
     static volatile long READ_WINDOW = 0;   // "刚发送"窗口截止(ms); 窗口内的已读上报放行 -> 回复才已读
     static final long READ_WINDOW_MS = 2500;
-    // 安卓已读模型: 浏览时用 message_ids 上报(被抑制), 回复时飞书只推 max_position 不带 ids。
-    // 故按会话暂存"浏览时抑制掉的 message_ids", 回复窗口内的读请求把它们补回去一起放行。
-    //   局限: 若你一直停在页面很久再回复, 飞书可能不再发读请求 -> 无载体回填 -> 仍未读(退出再进即可)。
-    static final java.util.Map<String, java.util.LinkedHashSet<String>> PENDING_READ =
-            new java.util.concurrent.ConcurrentHashMap<String, java.util.LinkedHashSet<String>>();
+    // 安卓已读模型: 浏览时用 message_ids 上报(被本模块抑制), 回复时飞书只推 max_position。
+    // 7.70 时代回复窗口内尚有"只带 max_position 的载体"可把暂存 ids 补回去放行; 8.1.12 真机
+    // 实测(2026-10-06 phase-7 基线对照): 浏览被抑制后飞书连回复载体也不发了(原生每条回复都发),
+    // 积压 ids 永远无车可搭 -> 对方看到你回复但消息仍未读。
+    // 故 v2.1: 浏览时按会话暂存被抑制读上报的完整原始参数, 回复瞬间主动构造一条与原生同构的
+    // 读上报(同请求类/同 ADAPTER/同 command 1021)经 Sdk._invokeAsync 直发 —— 报文层面与原生
+    // 不可区分, 内容为真实浏览记录仅时机自选; 每回复每会话至多一条; 失败保留暂存走旧载体兜底。
+    static final java.util.concurrent.ConcurrentHashMap<String, ReadStash> PENDING_READ =
+            new java.util.concurrent.ConcurrentHashMap<String, ReadStash>();
+
+    /** 一次被抑制读上报的暂存(ids 跨浏览合并, 上限500; 其余参数取最近一次浏览原值, 补报时原样重组)。 */
+    static final class ReadStash {
+        final java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<String>();
+        Object channel, maxPosition, threadId, p4, badgeCount, p6, foldIds;
+    }
+
+    /** 自构造补报请求会重入 antiread2.readreq 构造器 hook —— 置位期间该 hook 原样直通, 防把刚补报的 ids 再当浏览清空。 */
+    static final ThreadLocal<Boolean> SYNTH_ING = new ThreadLocal<Boolean>();
+
+    /** 补报出口: 生产=构造请求+ADAPTER.encode+Sdk._invokeAsync; 测试注入 fake 捕获 (ch/stash -> 发送)。 */
+    interface ReadReporter { void report(String ch, ReadStash st) throws Throwable; }
+    static volatile ReadReporter sReporter = new DefaultReadReporter();
+
+    static final class DefaultReadReporter implements ReadReporter {
+        @Override public void report(String ch, ReadStash st) throws Throwable {
+            Object req = synCtor.newInstance(new java.util.ArrayList<String>(st.ids), st.channel, st.maxPosition,
+                    st.threadId, st.p4, st.badgeCount, st.p6, st.foldIds);
+            byte[] payload = (byte[]) synEncode.invoke(synAdapter, req);
+            synInvoke.invoke(null, CMD_UPDATE_MESSAGES_ME_READ, payload, 0L);
+        }
+    }
+
+    static volatile boolean SYNTH_READY = false;
+    static java.lang.reflect.Constructor<?> synCtor;   // (List, Channel, Integer, String, Integer, Integer, Integer, List)
+    static Object synAdapter;                          // 静态 ADAPTER (Wire ProtoAdapter)
+    static java.lang.reflect.Method synEncode;         // ADAPTER.encode(Object) -> byte[]
+    static java.lang.reflect.Method synInvoke;         // Sdk._invokeAsync(I[BJ)V —— 8.1.12 dexdump 实测 invoke-static
+
+    /** 解析主动补报通道(进会话安装时一次); 任一环缺失只禁用补报, 载体兜底路径不受影响。 */
+    static void resolveSynthetic(ClassLoader cl) {
+        try {
+            Class<?> reqc = cl.loadClass(READ_REQ_CLASS);
+            synCtor = reqc.getConstructor(java.util.List.class, cl.loadClass("com.bytedance.lark.pb.basic.v1.Channel"),
+                    Integer.class, String.class, Integer.class, Integer.class, Integer.class, java.util.List.class);
+            synAdapter = reqc.getField("ADAPTER").get(null);
+            try { synEncode = synAdapter.getClass().getMethod("encode", Object.class); }
+            catch (NoSuchMethodException e) {
+                for (java.lang.reflect.Method m : synAdapter.getClass().getMethods())
+                    if ("encode".equals(m.getName()) && m.getParameterTypes().length == 1) { synEncode = m; break; }
+                if (synEncode == null) throw e;
+            }
+            synInvoke = Reflect.findClass(SDK_CLASS, cl).getMethod("_invokeAsync", int.class, byte[].class, long.class);
+            SYNTH_READY = true;
+            alog("已读补报通道就绪: " + SDK_CLASS + "._invokeAsync(cmd=" + CMD_UPDATE_MESSAGES_ME_READ + ")");
+        } catch (Throwable t) {
+            SYNTH_READY = false;
+            alog("已读补报通道不可用(仅载体兜底): " + t);
+        }
+    }
+
+    /** 从回复请求参数定位会话 id: 优先 PB Channel 参数(toString 含 id=), 退而求其次裸数字串。 */
+    static String replyChannelId(Object[] ra) {
+        if (ra != null) {
+            for (Object o : ra)
+                if (o != null && "com.bytedance.lark.pb.basic.v1.Channel".equals(o.getClass().getName())) {
+                    String c = channelId(o); if (!"?".equals(c)) return c;
+                }
+            for (Object o : ra) if (o instanceof String && ((String) o).matches("\\d{8,}")) return (String) o;
+        }
+        return "?";
+    }
     static final java.util.regex.Pattern CH_ID = java.util.regex.Pattern.compile("id=(\\d{6,})");
     static String channelId(Object ch) {
         if (ch == null) return "?";
@@ -750,14 +816,38 @@ public class AntiRecall {
                   alog("antiread2: 发送开窗 hook " + sc); }
             catch (Throwable t) { alog("antiread2: 发送类 " + sc + " 不存在: " + t); }
         }
+        resolveSynthetic(cl);   // 失败只禁用主动补报, 载体兜底不受影响
         ANTIREAD2_INSTALLED = true;
-        alog("antiread2 installed: hook " + READ_REQ_CLASS + " ctor (antiread=" + Config.antiread + ", 回复才已读)");
+        alog("antiread2 installed: hook " + READ_REQ_CLASS + " ctor (antiread=" + Config.antiread
+                + ", 回复才已读" + (SYNTH_READY ? "+回复即主动补报" : "") + ")");
     }
 
-    // 你发消息时开 2.5s 已读窗口(与已读请求同进程/同层, 时间窗区分"被动浏览 vs 回复")。
+    // 你发消息时开 2.5s 已读窗口(与已读请求同进程/同层, 时间窗区分"被动浏览 vs 回复"),
+    // 并在回复瞬间主动补报该会话积压已读(v2.1, 见 PENDING_READ 处注释)。
+    // CreateQuasiMessageRequest(乐观回显)先于实际发送触发, 成功后清暂存 -> SendMessageRequest
+    // 再次触发时查不到暂存自然空转, 保证每回复每会话至多补一条。
     static class SendReqHook implements XposedInterface.Hooker {
         @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
             READ_WINDOW = System.currentTimeMillis() + READ_WINDOW_MS;
+            if (SYNTH_READY && !Boolean.TRUE.equals(SYNTH_ING.get())) {
+                try {
+                    String ch = replyChannelId(chain.getArgs().toArray());
+                    ReadStash st = ch == null ? null : PENDING_READ.get(ch);
+                    if (st != null && !st.ids.isEmpty() && Config.antiread && TAMPER != 2) {
+                        SYNTH_ING.set(Boolean.TRUE);
+                        try {
+                            sReporter.report(ch, st);
+                            PENDING_READ.remove(ch);   // 仅成功清暂存: 失败保留, 走载体兜底/下次回复重试
+                            int c = READ_LOG_COUNT.incrementAndGet();
+                            if (c <= 200) alog("READ_REQ 已读补报(主动," + st.ids.size() + "条) ch=" + ch);
+                        } finally {
+                            SYNTH_ING.set(Boolean.FALSE);
+                        }
+                    }
+                } catch (Throwable t) {
+                    alog("已读补报失败(暂存保留,走载体兜底): " + t);
+                }
+            }
             return chain.proceed();
         }
     }
@@ -772,30 +862,33 @@ public class AntiRecall {
             // (审计 F1: 同一次构造会被执行两遍)。
             Object[] a = chain.getArgs().toArray();
             try {
-                if (a != null && a.length >= 8) {
+                if (a != null && a.length >= 8 && !Boolean.TRUE.equals(SYNTH_ING.get())) {
                     boolean inSendWindow = System.currentTimeMillis() < READ_WINDOW;
                     String ch = channelId(a.length > 1 ? a[1] : null);
                     int midsBefore = (a[0] instanceof java.util.List) ? ((java.util.List) a[0]).size() : -1;
 
                     if (Config.antiread && TAMPER != 2) {
                         if (inSendWindow) {
-                            // 回复窗口内: 放行, 并把该会话浏览时暂存的 message_ids 补回去(安卓回复只带
-                            //   max_position 不带 ids, 不补则对方仍未读) -> 对方看到你已读可视消息。
-                            java.util.LinkedHashSet<String> buf = PENDING_READ.remove(ch);
+                            // 回复窗口内(载体兜底路径): 放行, 并把该会话浏览时暂存的 message_ids 补回去
+                            //   (安卓回复只带 max_position 不带 ids, 不补则对方仍未读)。
+                            //   v2.1 主动补报已清暂存时此合并不了任何 ids, 两路径天然幂等。
+                            ReadStash st = PENDING_READ.remove(ch);
                             if (a[0] instanceof java.util.List) {
                                 java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<String>();
-                                if (buf != null) merged.addAll(buf);
+                                if (st != null) merged.addAll(st.ids);
                                 for (Object o : (java.util.List) a[0]) if (o instanceof String) merged.add((String) o);
                                 a[0] = new java.util.ArrayList<String>(merged);
                             }
                         } else {
-                            // 纯浏览: 暂存被抑制的 message_ids(按会话, 上限500), 再清空本次上报。
+                            // 纯浏览: 暂存被抑制读上报的完整原始参数(ids 合并, 其余取本次原值), 再清空本次上报。
                             if (a[0] instanceof java.util.List && !((java.util.List) a[0]).isEmpty()) {
-                                java.util.LinkedHashSet<String> buf = PENDING_READ.get(ch);
-                                if (buf == null) { buf = new java.util.LinkedHashSet<String>(); PENDING_READ.put(ch, buf); }
-                                for (Object o : (java.util.List) a[0]) if (o instanceof String) buf.add((String) o);
-                                java.util.Iterator<String> it = buf.iterator();
-                                while (buf.size() > 500 && it.hasNext()) { it.next(); it.remove(); }
+                                ReadStash st = PENDING_READ.get(ch);
+                                if (st == null) { st = new ReadStash(); PENDING_READ.put(ch, st); }
+                                for (Object o : (java.util.List) a[0]) if (o instanceof String) st.ids.add((String) o);
+                                java.util.Iterator<String> it = st.ids.iterator();
+                                while (st.ids.size() > 500 && it.hasNext()) { it.next(); it.remove(); }
+                                st.channel = a[1]; st.maxPosition = a[2]; st.threadId = a[3];
+                                st.p4 = a[4]; st.badgeCount = a[5]; st.p6 = a[6]; st.foldIds = a[7];
                                 a[0] = new java.util.ArrayList<String>();
                             }
                             if (a[7] instanceof java.util.List) a[7] = new java.util.ArrayList<Long>();     // fold_ids
