@@ -660,9 +660,10 @@ public class HookMigrationBehaviorTest {
                         && AntiRecall.PENDING_READ.get("123456789").contains("visible-message")
                         && AntiRecall.PENDING_READ.get("123456789").size() == 1,
                 "复审P2回归：混合类型列表 → 清空生效+仅合并 String(逐项过滤, 无 CCE 中止)");
-        // 真线程压力: 双浏览线程各 100 条并发追加 + 中途原子消费 —— 承诺零丢失(compute 重插可能带来
-        // 已消费 id 的重复上报, 服务端幂等无害), 不承诺 strict mutex(线性化在 remove 之前的 compute
-        // 会把全量集原样重插回 map)。
+        // 真线程压力: 双浏览线程各 100 条并发追加 + 中途原子消费 —— 仅断言零丢失(已消费∪剩余⊇全部追加)。
+        // 同一 key 上 compute 与 remove 原子且串行化: compute 先完成则 remove 取走更新后的整组,
+        // remove 先完成则 compute 从新追加项建组 —— 交错本身不会把已消费的整组重新插回 map;
+        // 可能的重复上报来自独立的重复上报(如载体与重放先后各报一次), 服务端幂等无害。
         AntiRecall.PENDING_READ.clear();
         final int perThread = 100;
         final java.util.Set<String> appended = java.util.Collections.synchronizedSet(new LinkedHashSet<String>());
