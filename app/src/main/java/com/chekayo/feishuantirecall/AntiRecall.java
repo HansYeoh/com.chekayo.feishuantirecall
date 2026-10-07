@@ -751,10 +751,67 @@ public class AntiRecall {
     interface KnReplayer { void replay(Object impl, Object m, Object cb) throws Throwable; }
     static volatile KnReplayer sReplayer = new DefaultKnReplayer();
 
+    /** 重放调度器: 生产=独立后台线程(重放含 Kn 调用+网络链, 绝不占用发送主线程); 测试注入同步执行。 */
+    interface ReplayScheduler { void schedule(Runnable r); }
+    static volatile ReplayScheduler sScheduler = new DefaultReplayScheduler();
+
+    static final class DefaultReplayScheduler implements ReplayScheduler {
+        @Override public void schedule(Runnable r) { new Thread(r, "feishukit-read-replay").start(); }
+    }
+
     static final class DefaultKnReplayer implements KnReplayer {
         @Override public void replay(Object impl, Object m, Object cb) throws Throwable {
             try { knMethod.invoke(impl, m, cb); }
             catch (Throwable t) { throw new RuntimeException("[补报.invoke] " + describe(t), t); }
+        }
+    }
+
+    /** 一次重放任务(后台线程执行): 模板 ids 原地替换为合并全集 → Kn 重放; 失败把缓存放回走载体兜底。 */
+    static final class ReplayTask implements Runnable {
+        final String ch;
+        final Object[] ctx;   // {impl, m, cb, ids样本}
+        final java.util.LinkedHashSet<String> merged;
+        ReplayTask(String ch, Object[] ctx, java.util.LinkedHashSet<String> merged) {
+            this.ch = ch; this.ctx = ctx; this.merged = merged;
+        }
+        @Override public void run() {
+            KN_REPLAY.set(Boolean.TRUE);
+            try {
+                if (!resolveIdsAccessor(ctx)) {
+                    alog("重放模板 ids 访问器无法唯一定位, 按最后一次包原样重放");
+                }
+                if (knAccIds != null) {
+                    try {
+                        java.util.List slot = (java.util.List) knAccIds.invoke(ctx[1]);
+                        if (slot != null) { slot.clear(); slot.addAll(merged); }
+                    } catch (Throwable t) {
+                        alog("重放模板 ids 列表处理失败(按最后一次包原样重放): " + describe(t));
+                    }
+                }
+                sReplayer.replay(ctx[0], ctx[1], ctx[2]);
+                int c = READ_LOG_COUNT.incrementAndGet();
+                if (c <= 200) alog("READ_REQ 已读补报(重放," + merged.size() + "条) ch=" + ch);
+            } catch (Throwable t) {
+                restoreReplayCache(ch, ctx, merged);
+                alog("已读补报失败(缓存恢复,走载体兜底): " + describe(t));
+            } finally {
+                KN_REPLAY.set(Boolean.FALSE);
+            }
+        }
+    }
+
+    /** 重放失败后的缓存恢复: 模板/累加集放回(不覆盖更新的截获), 兜底暂存同步回填。 */
+    private static void restoreReplayCache(String ch, Object[] ctx, java.util.LinkedHashSet<String> merged) {
+        try {
+            if (KN_CTX.putIfAbsent(ch, ctx) == null) {
+                java.util.LinkedHashSet<String> idsBack = KN_IDS.get(ch);
+                if (idsBack == null) { idsBack = new java.util.LinkedHashSet<String>(); KN_IDS.put(ch, idsBack); }
+                idsBack.addAll(merged);
+            }
+            java.util.LinkedHashSet<String> pr = PENDING_READ.get(ch);
+            if (pr == null) { pr = new java.util.LinkedHashSet<String>(); PENDING_READ.put(ch, pr); }
+            pr.addAll(merged);
+        } catch (Throwable ignore) {
         }
     }
 
@@ -770,44 +827,78 @@ public class AntiRecall {
         }
     }
 
-    /** 在 impl 类按签名形状发现 Kn: void 实例方法, 参数=(同包类型, cb), 唯一命中;
-        返回 {Method, mClass} 或 null(零命中/多义都算失败, 保守降级)。 */
-    static Object[] discoverKn(Class<?> impl, Class<?> cb) {
+    /** 在 impl 类按签名形状发现 Kn 候选: void 实例方法, 参数=(同包类型, cb); 返回全部命中(空=零命中)。
+        真机 8.1.12 实测多义(同形状方法不止一个) —— 多义时交由运行时栈自学习定夺, 不猜。 */
+    static java.util.List<java.lang.reflect.Method> discoverKn(Class<?> impl, Class<?> cb) {
         String pkg = impl.getName().substring(0, impl.getName().lastIndexOf('.'));
-        java.lang.reflect.Method hit = null;
-        Class<?> mCls = null;
+        java.util.List<java.lang.reflect.Method> hits = new java.util.ArrayList<java.lang.reflect.Method>();
         for (java.lang.reflect.Method mm : impl.getDeclaredMethods()) {
             if (!void.class.equals(mm.getReturnType())
                     || java.lang.reflect.Modifier.isStatic(mm.getModifiers())) continue;
             Class<?>[] ps = mm.getParameterTypes();
             if (ps.length != 2 || !cb.equals(ps[1])) continue;
             if (ps[0].isPrimitive() || !ps[0].getName().startsWith(pkg + ".")) continue;
-            if (hit != null) return null;   // 多义 → 保守失败
-            hit = mm;
-            mCls = ps[0];
+            hits.add(mm);
         }
-        return hit == null ? null : new Object[]{ hit, mCls };
+        return hits;
     }
 
-    /** 解析 Kn 重放通道(进会话安装时一次): 稳定锚点 + 签名发现, 不维护版本对照表;
-        任一环缺失 KN_READY=false 纯载体降级。 */
+    /** 解析 Kn 重放通道(进会话安装时一次): 稳定锚点 + 签名发现; 唯一命中立即挂 hook,
+        多义挂起等运行时栈自学习(读请求构造器栈里必然有真实 Kn 帧), 零命中纯载体降级。 */
     static void installKnReplay(ClassLoader cl) {
         try {
             Class<?> impl = Reflect.findClass(IM_MSG_SERVICE_V2, cl);
             Class<?> cbCls = cl.loadClass(KN_CB_CLASS);
-            Object[] kn = discoverKn(impl, cbCls);
-            if (kn == null) throw new IllegalStateException("Kn 签名形状未唯一命中");
-            java.lang.reflect.Method knM = (java.lang.reflect.Method) kn[0];
-            HookRuntime.hookMethod(impl, knM.getName(), knM.getParameterTypes(),
-                    "antiread2.kncapture", new KnCaptureHook());
-            knM.setAccessible(true);
-            knMethod = knM;
-            KN_READY = true;
-            alog("已读补报通道就绪: Kn 重放 (" + impl.getSimpleName() + "#" + knM.getName()
-                    + ", m=" + ((Class<?>) kn[1]).getName() + ")");
+            java.util.List<java.lang.reflect.Method> cands = discoverKn(impl, cbCls);
+            if (cands.isEmpty()) throw new IllegalStateException("Kn 签名形状零命中");
+            if (cands.size() == 1) {
+                installKnHook(impl, cands.get(0));
+            } else {
+                knImplClass = impl;
+                knCandidates = cands;
+                knLearnPending = true;
+                alog("Kn 签名形状多义(" + cands.size() + "个), 挂起待首次读上报时按调用栈自学习定位");
+            }
         } catch (Throwable t) {
             KN_READY = false;
             alog("已读补报通道不可用(仅载体兜底): " + describe(t));
+        }
+    }
+
+    private static void installKnHook(Class<?> impl, java.lang.reflect.Method knM) throws Throwable {
+        HookRuntime.hookMethod(impl, knM.getName(), knM.getParameterTypes(),
+                "antiread2.kncapture", new KnCaptureHook());
+        knM.setAccessible(true);
+        knMethod = knM;
+        KN_READY = true;
+        alog("已读补报通道就绪: Kn 重放 (" + impl.getSimpleName() + "#" + knM.getName() + ")");
+    }
+
+    /** 运行时栈自学习: 读请求构造器被调用时, 真实 Kn 帧必然在当前栈上 —— 按类名+方法名对号入座,
+        从候选中精确选定并挂 hook。学到即收摊; 学不到保留挂起等下一次读上报。 */
+    static volatile Class<?> knImplClass;
+    static volatile java.util.List<java.lang.reflect.Method> knCandidates;
+    static volatile boolean knLearnPending = false;
+
+    private static void learnKnFromStack() {
+        try {
+            Class<?> impl = knImplClass;
+            java.util.List<java.lang.reflect.Method> cands = knCandidates;
+            if (impl == null || cands == null) { knLearnPending = false; return; }
+            for (StackTraceElement f : new Throwable().getStackTrace()) {
+                if (!impl.getName().equals(f.getClassName())) continue;
+                for (java.lang.reflect.Method c : cands) {
+                    if (!c.getName().equals(f.getMethodName())) continue;
+                    knLearnPending = false;
+                    knCandidates = null;
+                    installKnHook(impl, c);
+                    return;
+                }
+            }
+            // 本栈没有候选帧(异常路径), 保留挂起等下一次读上报
+        } catch (Throwable t) {
+            knLearnPending = false;
+            alog("Kn 调用栈自学习失败(纯载体降级): " + describe(t));
         }
     }
 
@@ -901,9 +992,10 @@ public class AntiRecall {
     }
 
     // 你发消息时开 2.5s 已读窗口(与已读请求同进程/同层, 时间窗区分"被动浏览 vs 回复"),
-    // 并在回复瞬间把该会话累加截获的 ids 合并进重放模板后重放(v2.3, 见 PENDING_READ 处注释)。
-    // CreateQuasiMessageRequest(乐观回显)先于实际发送触发, 重放成功后清缓存 -> SendMessageRequest
-    // 再次触发时查不到缓存自然空转, 保证每回复每会话至多重放一次。
+    // 并在回复瞬间认领该会话的累加缓存后把重放交给后台线程(v2.4, 见 PENDING_READ 处注释)。
+    // CreateQuasiMessageRequest(乐观回显)先于实际发送触发, 认领后 SendMessageRequest 二次触发
+    // 查不到缓存自然空转, 保证每回复每会话至多重放一次; 重放绝不阻塞发送主线程(首放预热/
+    // 反射/网络链都在后台)。
     static class SendReqHook implements XposedInterface.Hooker {
         @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
             READ_WINDOW = System.currentTimeMillis() + READ_WINDOW_MS;
@@ -914,38 +1006,11 @@ public class AntiRecall {
                     java.util.LinkedHashSet<String> merged = ch == null ? null : KN_IDS.get(ch);
                     if (ctx != null && merged != null && !merged.isEmpty()
                             && Config.antiread && TAMPER != 2) {
-                        // 把模板 m 的 ids 列表原地替换为合并全集(飞书拆多少条包都不丢)。
-                        // ids 访问器按样本关联定位一次(m 的无参 List 方法中, 返回列表与缓存样本同引用/同内容者);
-                        // 定位失败或列表不可变 → 降级按最后一次包原样重放(仍有部分效果)。
-                        if (!resolveIdsAccessor(ctx)) {
-                            alog("重放模板 ids 访问器无法唯一定位, 按最后一次包原样重放");
-                        }
-                        java.util.List<Object> slot = null;
-                        if (knAccIds != null) {
-                            try { slot = (java.util.List<Object>) knAccIds.invoke(ctx[1]); }
-                            catch (Throwable t) { alog("读取重放模板 ids 失败: " + describe(t)); }
-                        }
-                        boolean mergedIn = false;
-                        if (slot != null) {
-                            try {
-                                slot.clear();
-                                slot.addAll(merged);
-                                mergedIn = true;
-                            } catch (Throwable immutable) {
-                                alog("重放模板 ids 列表不可变, 按最后一次包原样重放: " + immutable);
-                            }
-                        }
-                        KN_REPLAY.set(Boolean.TRUE);
-                        try {
-                            sReplayer.replay(ctx[0], ctx[1], ctx[2]);
-                            KN_CTX.remove(ch);   // 仅成功清缓存: 失败保留, 走载体兜底/下次回复重试
-                            KN_IDS.remove(ch);
-                            PENDING_READ.remove(ch);   // 重放已覆盖同一批 ids, 兜底缓存一并清掉防载体再来时重复上报
-                            int c = READ_LOG_COUNT.incrementAndGet();
-                            if (c <= 200) alog("READ_REQ 已读补报(重放," + (mergedIn ? merged.size() : -1) + "条) ch=" + ch);
-                        } finally {
-                            KN_REPLAY.set(Boolean.FALSE);
-                        }
+                        // 同步认领(防异步窗口内二次回复重复重放), 重放整体后台化
+                        KN_CTX.remove(ch);
+                        KN_IDS.remove(ch);
+                        PENDING_READ.remove(ch);   // 重放将覆盖同一批 ids, 兜底缓存一并领走防重复
+                        sScheduler.schedule(new ReplayTask(ch, ctx, merged));
                     }
                 } catch (Throwable t) {
                     alog("已读补报失败(缓存保留,走载体兜底): " + describe(t));
@@ -965,6 +1030,8 @@ public class AntiRecall {
             // (审计 F1: 同一次构造会被执行两遍)。
             Object[] a = chain.getArgs().toArray();
             try {
+                // v2.4 Kn 多义时挂起的运行时栈自学习: 读上报构造必然发生在真实 Kn 内, 栈上定夺候选。
+                if (knLearnPending && !Boolean.TRUE.equals(KN_REPLAY.get())) learnKnFromStack();
                 // KN_REPLAY 置位 = 本模块正在重放浏览上报, 原样直通(真实 ids 不得再被清空)
                 if (a != null && a.length >= 8 && !Boolean.TRUE.equals(KN_REPLAY.get())) {
                     boolean inSendWindow = System.currentTimeMillis() < READ_WINDOW;
