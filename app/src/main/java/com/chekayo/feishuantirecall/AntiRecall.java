@@ -844,7 +844,8 @@ public class AntiRecall {
     }
 
     /** 解析 Kn 重放通道(进会话安装时一次): 稳定锚点 + 签名发现; 唯一命中立即挂 hook,
-        多义挂起等运行时栈自学习(读请求构造器栈里必然有真实 Kn 帧), 零命中纯载体降级。 */
+        多义给全部候选挂探测 hook(谁被真实读上报调用谁就是真 Kn, 当场卸探测/装正式 hook/
+        本次调用直接落线程槽 —— 学习不吃掉任何一次浏览), 零命中纯载体降级。 */
     static void installKnReplay(ClassLoader cl) {
         try {
             Class<?> impl = Reflect.findClass(IM_MSG_SERVICE_V2, cl);
@@ -855,9 +856,14 @@ public class AntiRecall {
                 installKnHook(impl, cands.get(0));
             } else {
                 knImplClass = impl;
-                knCandidates = cands;
+                java.util.List<HookRuntime.InstalledHook> probes =
+                        new java.util.ArrayList<HookRuntime.InstalledHook>();
+                for (java.lang.reflect.Method c : cands) {
+                    probes.add(HookRuntime.hookMethod(impl, c.getName(), c.getParameterTypes(),
+                            "antiread2.knprobe." + c.getName(), new KnProbeHook(c, probes)));
+                }
                 knLearnPending = true;
-                alog("Kn 签名形状多义(" + cands.size() + "个), 挂起待首次读上报时按调用栈自学习定位");
+                alog("Kn 签名形状多义(" + cands.size() + "个), 已挂探测 hook —— 首次读上报时自动定夺并截获");
             }
         } catch (Throwable t) {
             KN_READY = false;
@@ -874,31 +880,40 @@ public class AntiRecall {
         alog("已读补报通道就绪: Kn 重放 (" + impl.getSimpleName() + "#" + knM.getName() + ")");
     }
 
-    /** 运行时栈自学习: 读请求构造器被调用时, 真实 Kn 帧必然在当前栈上 —— 按类名+方法名对号入座,
-        从候选中精确选定并挂 hook。学到即收摊; 学不到保留挂起等下一次读上报。 */
-    static volatile Class<?> knImplClass;
-    static volatile java.util.List<java.lang.reflect.Method> knCandidates;
     static volatile boolean knLearnPending = false;
+    static volatile Class<?> knImplClass;
+    static final java.util.concurrent.atomic.AtomicBoolean KN_LEARN_RACE =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
-    private static void learnKnFromStack() {
-        try {
-            Class<?> impl = knImplClass;
-            java.util.List<java.lang.reflect.Method> cands = knCandidates;
-            if (impl == null || cands == null) { knLearnPending = false; return; }
-            for (StackTraceElement f : new Throwable().getStackTrace()) {
-                if (!impl.getName().equals(f.getClassName())) continue;
-                for (java.lang.reflect.Method c : cands) {
-                    if (!c.getName().equals(f.getMethodName())) continue;
+    /** 探测 hook(多义期挂在全部候选上): 真实读上报只会走真 Kn —— 首个被调用的候选即真身:
+        CAS 抢占 → 卸全部探测 → 装正式截获 hook → 本次调用的三元组直接落线程槽(浏览不丢)。
+        输家/未学成期调用一律只落线程槽不做学习。 */
+    static class KnProbeHook implements XposedInterface.Hooker {
+        final java.lang.reflect.Method candidate;
+        final java.util.List<HookRuntime.InstalledHook> probes;
+        KnProbeHook(java.lang.reflect.Method c, java.util.List<HookRuntime.InstalledHook> probes) {
+            this.candidate = c;
+            this.probes = probes;
+        }
+        @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+            Object[] a = chain.getArgs().toArray();
+            if (knLearnPending && KN_LEARN_RACE.compareAndSet(false, true)) {
+                try {
                     knLearnPending = false;
-                    knCandidates = null;
-                    installKnHook(impl, c);
-                    return;
+                    for (HookRuntime.InstalledHook p : probes) {
+                        try { p.unhook(); } catch (Throwable ignore) { }
+                    }
+                    installKnHook(knImplClass, candidate);
+                } catch (Throwable t) {
+                    knLearnPending = true;
+                    KN_LEARN_RACE.set(false);
+                    alog("Kn 探测定夺失败(等其他候选再试): " + describe(t));
                 }
             }
-            // 本栈没有候选帧(异常路径), 保留挂起等下一次读上报
-        } catch (Throwable t) {
-            knLearnPending = false;
-            alog("Kn 调用栈自学习失败(纯载体降级): " + describe(t));
+            if (KN_READY && !Boolean.TRUE.equals(KN_REPLAY.get())) {
+                CURRENT_KN.set(new Object[]{ chain.getThisObject(), a[0], a.length > 1 ? a[1] : null });
+            }
+            return chain.proceed(a);
         }
     }
 
@@ -1030,8 +1045,6 @@ public class AntiRecall {
             // (审计 F1: 同一次构造会被执行两遍)。
             Object[] a = chain.getArgs().toArray();
             try {
-                // v2.4 Kn 多义时挂起的运行时栈自学习: 读上报构造必然发生在真实 Kn 内, 栈上定夺候选。
-                if (knLearnPending && !Boolean.TRUE.equals(KN_REPLAY.get())) learnKnFromStack();
                 // KN_REPLAY 置位 = 本模块正在重放浏览上报, 原样直通(真实 ids 不得再被清空)
                 if (a != null && a.length >= 8 && !Boolean.TRUE.equals(KN_REPLAY.get())) {
                     boolean inSendWindow = System.currentTimeMillis() < READ_WINDOW;

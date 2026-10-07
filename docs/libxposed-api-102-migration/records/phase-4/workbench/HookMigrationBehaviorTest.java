@@ -150,8 +150,7 @@ public class HookMigrationBehaviorTest {
     }
 
     public static class FakeAmbigImpl {
-        public static volatile Runnable ON_KNA;   // 测试: 在 knA 栈帧内触发读请求构造(供栈自学习)
-        public void knA(FakeMPkt pkt, FakeCallback cb) { if (ON_KNA != null) ON_KNA.run(); }
+        public void knA(FakeMPkt pkt, FakeCallback cb) { }
         public void knB(FakeMPkt pkt, FakeCallback cb) { }
     }
 
@@ -300,7 +299,7 @@ public class HookMigrationBehaviorTest {
                 HookRuntime.hookMethod(FakeChannel.class, "toString", new Class<?>[0], "p4/e2e/toString", noop);
         check(dup == first && installCount - before == 1, "同 logicalId 二次安装幂等（0 新框架安装）");
 
-        // ── 9. v2.4 签名发现：Kn 候选按形状全量枚举(干扰项过滤), 多义交运行时栈自学习 ──
+        // ── 9. v2.4 签名发现：Kn 候选按形状全量枚举(干扰项过滤), 多义交探测 hook 定夺 ──
         java.util.List<java.lang.reflect.Method> cands = AntiRecall.discoverKn(FakeImpl.class, FakeCallback.class);
         check(cands.size() == 1 && "reportRead".equals(cands.get(0).getName()),
                 "签名发现：唯一命中(过滤参数个数/回调类型/static/返回类型干扰项)");
@@ -308,29 +307,30 @@ public class HookMigrationBehaviorTest {
         check(amb.size() == 2, "签名发现：多义全量列出(knA/knB), 不猜测");
         check(AntiRecall.discoverKn(FakeImpl.class, FakeUnusedCb.class).isEmpty(),
                 "签名发现：回调类型无任何方法使用 → 零命中");
-        // 栈自学习: 多义挂起后, 首次读上报的栈上必然有真实 Kn 帧 → 按帧精确选定并挂 hook
+        // 多义探测: 全候选挂探测 hook —— 首个被真实调用的候选即真身, 卸探测+装正式+本次落槽一步完成
         AntiRecall.knImplClass = FakeAmbigImpl.class;
-        AntiRecall.knCandidates = amb;
         AntiRecall.knLearnPending = true;
         AntiRecall.KN_READY = false;
-        FakeAmbigImpl.ON_KNA = new Runnable() {
-            public void run() {
-                try {
-                    readHook.intercept(new FakeChain(readReqCtor, null,
-                            new Object[]{ new ArrayList<String>(), new FakeChannel(), Long.valueOf(1),
-                                    null, null, null, null, folds }, null));
-                } catch (Throwable t) { throw new RuntimeException(t); }
-            }
-        };
-        new FakeAmbigImpl().knA(new FakeMPkt("m1"), new FakeCallback());   // 栈内触发读上报
-        check(AntiRecall.KN_READY && AntiRecall.knMethod != null
-                        && "knA".equals(AntiRecall.knMethod.getName()) && !AntiRecall.knLearnPending,
-                "栈自学习：多义候选取调用栈上的真实方法(knA)并挂 hook 就绪");
-        FakeAmbigImpl.ON_KNA = null;
+        AntiRecall.CURRENT_KN.remove();
+        java.util.List<HookRuntime.InstalledHook> probes = new ArrayList<HookRuntime.InstalledHook>();
+        AntiRecall.KnProbeHook probeA = new AntiRecall.KnProbeHook(amb.get(0), probes);
+        AntiRecall.KnProbeHook probeB = new AntiRecall.KnProbeHook(amb.get(1), probes);
+        probes.add(HookRuntime.hookMethod(FakeAmbigImpl.class, "knA",
+                new Class<?>[]{ FakeMPkt.class, FakeCallback.class }, "t9/probe.knA", probeA));
+        probes.add(HookRuntime.hookMethod(FakeAmbigImpl.class, "knB",
+                new Class<?>[]{ FakeMPkt.class, FakeCallback.class }, "t9/probe.knB", probeB));
+        // 模拟真实调用 knA(假框架不织入 hook, 手动触发探测器的 intercept = hook 生效时 Kn 被调用)
+        probeA.intercept(new FakeChain(readReqCtor, new FakeImpl(),
+                new Object[]{ new FakeMPkt("m1"), new FakeCallback() }, null));
+        check(AntiRecall.KN_READY && "knA".equals(AntiRecall.knMethod.getName())
+                        && !AntiRecall.knLearnPending,
+                "多义探测：首个被调用的候选定夺为真 Kn 并挂正式 hook");
+        check(AntiRecall.CURRENT_KN.get() != null && AntiRecall.CURRENT_KN.get()[1] instanceof FakeMPkt,
+                "多义探测：本次调用三元组已落线程槽(学习不吃掉浏览)");
         AntiRecall.knImplClass = null;
-        AntiRecall.knCandidates = null;
         AntiRecall.knLearnPending = false;
         AntiRecall.KN_READY = false;
+        AntiRecall.CURRENT_KN.remove();
 
         // ── 10. v2.4 截获落账：Kn 线程槽 + 读请求构造按会话落账(KN_IDS 累加/KN_CTX 模板/样本) ──
         Config.antiread = true;
