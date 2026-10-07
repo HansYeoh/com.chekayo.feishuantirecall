@@ -704,7 +704,6 @@ public class HookMigrationBehaviorTest {
         check(union.size() == 200 && union.containsAll(appended),
                 "真线程压力：200 条并发追加在载体原子消费下零丢失(已消费∪剩余⊇全部追加)");
 
-        // ── 收尾：还原全局状态，避免影响同 JVM 其它用例 ──
         // ── 21. 表情回复触发：贴表情按 message_id 反查会话, 触发与回复相同的认领重放(用户需求回归) ──
         AntiRecall.READ_WINDOWS.clear();
         AntiRecall.KN_STATE.clear();
@@ -731,12 +730,42 @@ public class HookMigrationBehaviorTest {
         new AntiRecall.ReactionHook().intercept(new FakeChain(readReqCtor, null, new Object[]{ "zzz-unknown", "OK" }, null));
         check(replayed[0] == base21 + 1, "表情回复：未映射 message_id 不触发");
 
+        // ── 22. 复审 P2 回归：表情触发继承载体兜底窗口 —— Kn 未就绪降级态与打字回复完全等价 ──
+        AntiRecall.READ_WINDOWS.clear();
+        AntiRecall.KN_STATE.clear();
+        AntiRecall.PENDING_READ.clear();
+        AntiRecall.MSG2CH.clear();
+        Config.antiread = true;
+        AntiRecall.TAMPER = 0;
+        AntiRecall.KN_READY = false;   // Kn 通道未就绪(审计列举的降级场景)
+        // 早前就绪期遗留的 消息id→会话 映射
+        AntiRecall.MSG2CH.put("m-slot", "123456789");
+        // A 会话浏览(窗口关) → 暂存 seed
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ new ArrayList<String>(Arrays.asList("w1")), new FakeChannel(), Long.valueOf(90), null, null, null, null, folds }, null));
+        check(AntiRecall.PENDING_READ.get("123456789") != null
+                        && AntiRecall.PENDING_READ.get("123456789").contains("w1"),
+                "P2-窗口前置：A 浏览已暂存");
+        // 贴表情(message_id="m-slot") → 即使 Kn 未就绪也必须按会话开窗(载体兜底等价)
+        new AntiRecall.ReactionHook().intercept(new FakeChain(readReqCtor, null, new Object[]{ "m-slot", "OK" }, null));
+        check(AntiRecall.READ_WINDOWS.containsKey("123456789"),
+                "表情触发：降级态仍按会话打开载体兜底窗口");
+        // 窗口内 A 的载体请求 → 放行并消费全部暂存
+        FakeChain c22 = new FakeChain(readReqCtor, null,
+                new Object[]{ new ArrayList<String>(Arrays.asList("w2")), new FakeChannel(), Long.valueOf(91), null, null, null, null, folds }, null);
+        readHook.intercept(c22);
+        Object[] a22 = argsOf(c22);
+        check(((List<?>) a22[0]).containsAll(Arrays.asList("w1", "w2"))
+                        && AntiRecall.PENDING_READ.get("123456789") == null,
+                "表情触发：降级态窗口内载体请求放行全部暂存(与打字回复等价)");
+
         // ── 收尾：还原全局状态，避免影响同 JVM 其它用例 ──
         Config.antiread = false;
         AntiRecall.READ_WINDOWS.clear();
         AntiRecall.CACHE.clear();
         AntiRecall.PENDING_READ.clear();
         AntiRecall.KN_STATE.clear();
+        AntiRecall.MSG2CH.clear();
         AntiRecall.knAccResolved = false;
         AntiRecall.knAccIds = null;
         AntiRecall.knMethod = null;

@@ -1087,20 +1087,29 @@ public class AntiRecall {
     // 反射/网络链都在后台)。
     static class SendReqHook implements XposedInterface.Hooker {
         @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            long now = System.currentTimeMillis();
             String ch = replyChannelId(chain.getArgs().toArray());
-            boolean chatKnown = ch != null && !"?".equals(ch);
-            if (Config.antiread && TAMPER != 2 && chatKnown) {
-                // 审计 P1 修复: 窗口按会话记录 —— 回复 B 只开 B 的窗口, 不再放行 A 的浏览请求
-                READ_WINDOWS.put(ch, Long.valueOf(now + READ_WINDOW_MS));
-                for (java.util.Map.Entry<String, Long> e : READ_WINDOWS.entrySet()) {
-                    if (e.getValue().longValue() < now - READ_WINDOW_MS) READ_WINDOWS.remove(e.getKey());
-                }
-            }
-            if (chatKnown) tryClaimAndReplay(ch);
+            if (chatKnown(ch)) triggerReply(ch);
             return chain.proceed();
         }
     }
+
+    /** 触发源公共入口(复审 P2 修复抽取): 按会话打开载体兜底窗口 + 原子认领重放 ——
+        发送回复与表情回复经此完全等价: 即使 Kn 通道未就绪/调度失败/重放失败,
+        表情触发的窗口同样能放行 PENDING_READ 载体兜底, 不再只标被贴的那条。 */
+    static void triggerReply(String ch) {
+        if (!chatKnown(ch)) return;
+        long now = System.currentTimeMillis();
+        if (Config.antiread && TAMPER != 2) {
+            // 审计 P1 修复: 窗口按会话记录 —— 回复 B 只开 B 的窗口, 不再放行 A 的浏览请求
+            READ_WINDOWS.put(ch, Long.valueOf(now + READ_WINDOW_MS));
+            for (java.util.Map.Entry<String, Long> e : READ_WINDOWS.entrySet()) {
+                if (e.getValue().longValue() < now - READ_WINDOW_MS) READ_WINDOWS.remove(e.getKey());
+            }
+        }
+        tryClaimAndReplay(ch);
+    }
+
+    static boolean chatKnown(String ch) { return ch != null && !"?".equals(ch); }
 
     /** 认领并后台重放指定会话的累加缓存(发送回复与表情回复两个触发源共用);
         内含全部门控: 通道就绪/重放方法已定夺/卫兵/开关。 */
@@ -1129,16 +1138,15 @@ public class AntiRecall {
     }
 
     /** 表情回复触发源: CreateReactionRequest(message_id, type) 构造即用户贴了表情 ——
-        经 MSG2CH 反查会话后触发与回复相同的认领重放(表情回复=回复的一种, 用户需求:
-        表情回复后全部已浏览消息立即已读, 而非仅被贴的那条)。消息 id 反查不到(过期映射)
-        时不触发 —— 该条已由表情 RPC 自行标读, 其余消息维持未读语义。 */
+        经 MSG2CH 反查会话后走与回复完全相同的 triggerReply(开窗+认领重放)。
+        消息 id 反查不到(过期映射)时不触发 —— 该条已由表情 RPC 自行标读, 其余消息维持未读语义。 */
     static class ReactionHook implements XposedInterface.Hooker {
         @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
             Object[] a = chain.getArgs().toArray();
             try {
                 if (a.length >= 1 && a[0] instanceof String && !Boolean.TRUE.equals(KN_REPLAY.get())) {
                     String ch = MSG2CH.get(a[0]);
-                    if (ch != null) tryClaimAndReplay(ch);
+                    if (chatKnown(ch)) triggerReply(ch);
                 }
             } catch (Throwable ignore) {
             }
