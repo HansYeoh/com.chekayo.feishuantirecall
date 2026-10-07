@@ -150,7 +150,8 @@ public class HookMigrationBehaviorTest {
     }
 
     public static class FakeAmbigImpl {
-        public void knA(FakeMPkt pkt, FakeCallback cb) { }
+        public static volatile Runnable ON_KNA;   // 测试: 在 knA 栈帧内触发截获+读请求构造(供栈定夺)
+        public void knA(FakeMPkt pkt, FakeCallback cb) { if (ON_KNA != null) ON_KNA.run(); }
         public void knB(FakeMPkt pkt, FakeCallback cb) { }
     }
 
@@ -299,7 +300,7 @@ public class HookMigrationBehaviorTest {
                 HookRuntime.hookMethod(FakeChannel.class, "toString", new Class<?>[0], "p4/e2e/toString", noop);
         check(dup == first && installCount - before == 1, "同 logicalId 二次安装幂等（0 新框架安装）");
 
-        // ── 9. v2.4 签名发现：Kn 候选按形状全量枚举(干扰项过滤), 多义交探测 hook 定夺 ──
+        // ── 9. v2.4 签名发现：候选全量枚举(干扰项过滤)；多义全挂截获 + 首次落账时栈定夺重放方法 ──
         java.util.List<java.lang.reflect.Method> cands = AntiRecall.discoverKn(FakeImpl.class, FakeCallback.class);
         check(cands.size() == 1 && "reportRead".equals(cands.get(0).getName()),
                 "签名发现：唯一命中(过滤参数个数/回调类型/static/返回类型干扰项)");
@@ -307,30 +308,39 @@ public class HookMigrationBehaviorTest {
         check(amb.size() == 2, "签名发现：多义全量列出(knA/knB), 不猜测");
         check(AntiRecall.discoverKn(FakeImpl.class, FakeUnusedCb.class).isEmpty(),
                 "签名发现：回调类型无任何方法使用 → 零命中");
-        // 多义探测: 全候选挂探测 hook —— 首个被真实调用的候选即真身, 卸探测+装正式+本次落槽一步完成
-        AntiRecall.knImplClass = FakeAmbigImpl.class;
+        // 多义态: 全候选挂 KnCaptureHook(截获随时可用), 重放方法由首次落账的调用栈定夺 —— 学习不吃掉浏览
+        Config.antiread = true;
+        AntiRecall.TAMPER = 0;
+        AntiRecall.knCandidates = amb;
         AntiRecall.knLearnPending = true;
-        AntiRecall.KN_READY = false;
+        AntiRecall.KN_READY = true;
+        AntiRecall.KN_CTX.clear();
+        AntiRecall.KN_IDS.clear();
         AntiRecall.CURRENT_KN.remove();
-        java.util.List<HookRuntime.InstalledHook> probes = new ArrayList<HookRuntime.InstalledHook>();
-        AntiRecall.KnProbeHook probeA = new AntiRecall.KnProbeHook(amb.get(0), probes);
-        AntiRecall.KnProbeHook probeB = new AntiRecall.KnProbeHook(amb.get(1), probes);
-        probes.add(HookRuntime.hookMethod(FakeAmbigImpl.class, "knA",
-                new Class<?>[]{ FakeMPkt.class, FakeCallback.class }, "t9/probe.knA", probeA));
-        probes.add(HookRuntime.hookMethod(FakeAmbigImpl.class, "knB",
-                new Class<?>[]{ FakeMPkt.class, FakeCallback.class }, "t9/probe.knB", probeB));
-        // 模拟真实调用 knA(假框架不织入 hook, 手动触发探测器的 intercept = hook 生效时 Kn 被调用)
-        probeA.intercept(new FakeChain(readReqCtor, new FakeImpl(),
-                new Object[]{ new FakeMPkt("m1"), new FakeCallback() }, null));
-        check(AntiRecall.KN_READY && "knA".equals(AntiRecall.knMethod.getName())
-                        && !AntiRecall.knLearnPending,
-                "多义探测：首个被调用的候选定夺为真 Kn 并挂正式 hook");
-        check(AntiRecall.CURRENT_KN.get() != null && AntiRecall.CURRENT_KN.get()[1] instanceof FakeMPkt,
-                "多义探测：本次调用三元组已落线程槽(学习不吃掉浏览)");
-        AntiRecall.knImplClass = null;
-        AntiRecall.knLearnPending = false;
-        AntiRecall.KN_READY = false;
-        AntiRecall.CURRENT_KN.remove();
+        AntiRecall.knMethod = null;
+        AntiRecall.READ_WINDOW = 0;
+        AntiRecall.KnCaptureHook knCapA = new AntiRecall.KnCaptureHook();
+        final Object ambObj = new FakeAmbigImpl();
+        final FakeCallback cbObj2 = new FakeCallback();
+        final FakeMPkt pkt9 = new FakeMPkt("m1", "m2");
+        final java.util.List<String> ids9 = pkt9.idsList();
+        FakeAmbigImpl.ON_KNA = new Runnable() {
+            public void run() {
+                try {
+                    knCapA.intercept(new FakeChain(readReqCtor, ambObj, new Object[]{ pkt9, cbObj2 }, null));
+                    readHook.intercept(new FakeChain(readReqCtor, null,
+                            new Object[]{ ids9, new FakeChannel(), Long.valueOf(9), null, null, null, null, folds }, null));
+                } catch (Throwable t) { throw new RuntimeException(t); }
+            }
+        };
+        new FakeAmbigImpl().knA(pkt9, cbObj2);   // 截获+构造都发生在 knA 帧内
+        FakeAmbigImpl.ON_KNA = null;
+        check(AntiRecall.KN_CTX.get("123456789") != null
+                        && AntiRecall.KN_IDS.get("123456789").size() == 2
+                        && AntiRecall.CURRENT_KN.get() == null,
+                "多义：首次浏览即落账(学习不吃掉浏览)");
+        check("knA".equals(AntiRecall.knMethod.getName()) && !AntiRecall.knLearnPending,
+                "多义：重放方法由调用栈定夺为真实帧 knA");
 
         // ── 10. v2.4 截获落账：Kn 线程槽 + 读请求构造按会话落账(KN_IDS 累加/KN_CTX 模板/样本) ──
         Config.antiread = true;
@@ -487,6 +497,9 @@ public class HookMigrationBehaviorTest {
         AntiRecall.KN_IDS.clear();
         AntiRecall.knAccTried = false;
         AntiRecall.knAccIds = null;
+        AntiRecall.knMethod = null;
+        AntiRecall.knLearnPending = false;
+        AntiRecall.knCandidates = null;
         AntiRecall.sReplayer = new AntiRecall.DefaultKnReplayer();
         AntiRecall.sScheduler = new AntiRecall.DefaultReplayScheduler();
 

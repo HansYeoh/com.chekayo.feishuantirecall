@@ -843,27 +843,26 @@ public class AntiRecall {
         return hits;
     }
 
-    /** 解析 Kn 重放通道(进会话安装时一次): 稳定锚点 + 签名发现; 唯一命中立即挂 hook,
-        多义给全部候选挂探测 hook(谁被真实读上报调用谁就是真 Kn, 当场卸探测/装正式 hook/
-        本次调用直接落线程槽 —— 学习不吃掉任何一次浏览), 零命中纯载体降级。 */
+    /** 解析 Kn 重放通道(进会话安装时一次): 稳定锚点 + 签名发现; 全部候选都挂截获 hook(浏览上报
+        可能经由多个同形状方法中的任意一条, 全挂才不丢), knLearnPending=true 表示重放方法未定夺 ——
+        首次落账时从读请求构造的调用栈上精确认领真身(栈上必然有真实方法帧)。零命中纯载体降级。 */
     static void installKnReplay(ClassLoader cl) {
         try {
             Class<?> impl = Reflect.findClass(IM_MSG_SERVICE_V2, cl);
             Class<?> cbCls = cl.loadClass(KN_CB_CLASS);
             java.util.List<java.lang.reflect.Method> cands = discoverKn(impl, cbCls);
             if (cands.isEmpty()) throw new IllegalStateException("Kn 签名形状零命中");
+            for (java.lang.reflect.Method c : cands) {
+                HookRuntime.hookMethod(impl, c.getName(), c.getParameterTypes(),
+                        "antiread2.kncapture." + c.getName(), new KnCaptureHook());
+            }
             if (cands.size() == 1) {
-                installKnHook(impl, cands.get(0));
+                setKnMethod(cands.get(0));
             } else {
-                knImplClass = impl;
-                java.util.List<HookRuntime.InstalledHook> probes =
-                        new java.util.ArrayList<HookRuntime.InstalledHook>();
-                for (java.lang.reflect.Method c : cands) {
-                    probes.add(HookRuntime.hookMethod(impl, c.getName(), c.getParameterTypes(),
-                            "antiread2.knprobe." + c.getName(), new KnProbeHook(c, probes)));
-                }
-                knLearnPending = true;
-                alog("Kn 签名形状多义(" + cands.size() + "个), 已挂探测 hook —— 首次读上报时自动定夺并截获");
+                knCandidates = cands;
+                knLearnPending = true;   // 重放方法未定夺; 截获/落账照常工作
+                KN_READY = true;         // 截获已全挂 —— 重放方法等栈定夺
+                alog("Kn 签名形状多义(" + cands.size() + "个): 截获已全挂, 重放方法待首次读上报按调用栈定夺");
             }
         } catch (Throwable t) {
             KN_READY = false;
@@ -871,49 +870,38 @@ public class AntiRecall {
         }
     }
 
-    private static void installKnHook(Class<?> impl, java.lang.reflect.Method knM) throws Throwable {
-        HookRuntime.hookMethod(impl, knM.getName(), knM.getParameterTypes(),
-                "antiread2.kncapture", new KnCaptureHook());
+    private static void setKnMethod(java.lang.reflect.Method knM) {
         knM.setAccessible(true);
         knMethod = knM;
+        knLearnPending = false;
+        knCandidates = null;
         KN_READY = true;
-        alog("已读补报通道就绪: Kn 重放 (" + impl.getSimpleName() + "#" + knM.getName() + ")");
+        alog("已读补报通道就绪: Kn 重放 (" + knM.getDeclaringClass().getSimpleName() + "#" + knM.getName() + ")");
     }
 
     static volatile boolean knLearnPending = false;
-    static volatile Class<?> knImplClass;
-    static final java.util.concurrent.atomic.AtomicBoolean KN_LEARN_RACE =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
+    static volatile java.util.List<java.lang.reflect.Method> knCandidates;
 
-    /** 探测 hook(多义期挂在全部候选上): 真实读上报只会走真 Kn —— 首个被调用的候选即真身:
-        CAS 抢占 → 卸全部探测 → 装正式截获 hook → 本次调用的三元组直接落线程槽(浏览不丢)。
-        输家/未学成期调用一律只落线程槽不做学习。 */
-    static class KnProbeHook implements XposedInterface.Hooker {
-        final java.lang.reflect.Method candidate;
-        final java.util.List<HookRuntime.InstalledHook> probes;
-        KnProbeHook(java.lang.reflect.Method c, java.util.List<HookRuntime.InstalledHook> probes) {
-            this.candidate = c;
-            this.probes = probes;
-        }
-        @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            Object[] a = chain.getArgs().toArray();
-            if (knLearnPending && KN_LEARN_RACE.compareAndSet(false, true)) {
-                try {
-                    knLearnPending = false;
-                    for (HookRuntime.InstalledHook p : probes) {
-                        try { p.unhook(); } catch (Throwable ignore) { }
+    /** 从读请求构造的调用栈上认领重放方法: 真实方法帧必然在栈上(类名+方法名对号入座)。
+        认领成功收摊; 本栈无候选帧则保留挂起等下一次读上报。 */
+    private static void learnKnMethodFromStack() {
+        try {
+            java.util.List<java.lang.reflect.Method> cands = knCandidates;
+            if (cands == null) { knLearnPending = false; return; }
+            for (StackTraceElement f : new Throwable().getStackTrace()) {
+                for (java.lang.reflect.Method c : cands) {
+                    if (c.getName().equals(f.getMethodName())
+                            && c.getDeclaringClass().getName().equals(f.getClassName())) {
+                        setKnMethod(c);
+                        return;
                     }
-                    installKnHook(knImplClass, candidate);
-                } catch (Throwable t) {
-                    knLearnPending = true;
-                    KN_LEARN_RACE.set(false);
-                    alog("Kn 探测定夺失败(等其他候选再试): " + describe(t));
                 }
             }
-            if (KN_READY && !Boolean.TRUE.equals(KN_REPLAY.get())) {
-                CURRENT_KN.set(new Object[]{ chain.getThisObject(), a[0], a.length > 1 ? a[1] : null });
-            }
-            return chain.proceed(a);
+            // 本栈没有候选帧(异常路径), 保留挂起等下一次读上报
+        } catch (Throwable t) {
+            knLearnPending = false;
+            knCandidates = null;
+            alog("Kn 重放方法栈定位失败(截获照常, 重放降级原样包): " + describe(t));
         }
     }
 
@@ -1014,7 +1002,7 @@ public class AntiRecall {
     static class SendReqHook implements XposedInterface.Hooker {
         @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
             READ_WINDOW = System.currentTimeMillis() + READ_WINDOW_MS;
-            if (KN_READY && !Boolean.TRUE.equals(KN_REPLAY.get())) {
+            if (KN_READY && knMethod != null && !Boolean.TRUE.equals(KN_REPLAY.get())) {
                 try {
                     String ch = replyChannelId(chain.getArgs().toArray());
                     Object[] ctx = ch == null ? null : KN_CTX.get(ch);
@@ -1085,6 +1073,7 @@ public class AntiRecall {
                                         while (acc.size() > 500 && it2.hasNext()) { it2.next(); it2.remove(); }
                                         KN_CTX.put(ch, new Object[]{ kn[0], kn[1], kn[2], origIds });
                                         CURRENT_KN.remove();
+                                        if (knLearnPending) learnKnMethodFromStack();   // 栈上认领重放方法(与本落账同调用)
                                         int ck = READ_LOG_COUNT.incrementAndGet();
                                         if (ck <= 200) alog("Kn截获 ch=" + ch + " +" + origIds.size() + " (累计" + acc.size() + ")");
                                     }
