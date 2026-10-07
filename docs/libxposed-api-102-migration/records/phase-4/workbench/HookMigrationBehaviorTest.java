@@ -21,7 +21,7 @@ import java.util.List;
  *    浏览路径清空 message_ids/fold_ids 并暂存；回复窗口路径合并回填；开关关时原参透传；
  *    短参数构造安全放行。
  * 2. SendReqHook（构造器 hook，纯副作用）：按会话 READ_WINDOWS 开窗。
- * 9~19. v2.4/v2.5 回复即已读·签名发现 + Kn 截获重放（feat/read-as-unread）：Kn 候选按形状
+ * 9~21. v2.4/v2.5 回复即已读·签名发现 + Kn 截获重放（feat/read-as-unread）：Kn 候选按形状
  *    全量枚举（过滤干扰项），多义全候选挂截获 + 首次落账时栈定夺重放方法（学习不吃掉浏览）；
  *    统一会话状态 KnState（审计 P2-1 原子认领）；重放按样本关联定位 ids 访问器（区分双 List，
  *    审计 P2-3 锁内原子发布）→ 模板列表原地替换为累加全集 → 后台重放一次并清缓存；
@@ -703,6 +703,33 @@ public class HookMigrationBehaviorTest {
         if (AntiRecall.PENDING_READ.get("123456789") != null) union.addAll(AntiRecall.PENDING_READ.get("123456789"));
         check(union.size() == 200 && union.containsAll(appended),
                 "真线程压力：200 条并发追加在载体原子消费下零丢失(已消费∪剩余⊇全部追加)");
+
+        // ── 收尾：还原全局状态，避免影响同 JVM 其它用例 ──
+        // ── 21. 表情回复触发：贴表情按 message_id 反查会话, 触发与回复相同的认领重放(用户需求回归) ──
+        AntiRecall.READ_WINDOWS.clear();
+        AntiRecall.KN_STATE.clear();
+        AntiRecall.PENDING_READ.clear();
+        AntiRecall.MSG2CH.clear();
+        Config.antiread = true;
+        AntiRecall.TAMPER = 0;
+        AntiRecall.KN_READY = true;
+        // 浏览落账: ids(r1,r2) 暂存 + MSG2CH 建立 消息id→会话 映射
+        FakeMPkt rPkt = new FakeMPkt("r1", "r2");
+        AntiRecall.CURRENT_KN.set(new Object[]{ implObj, rPkt, cbObj });
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ rPkt.idsList(), new FakeChannel(), Long.valueOf(80), null, null, null, null, folds }, null));
+        check("123456789".equals(AntiRecall.MSG2CH.get("r1")) && "123456789".equals(AntiRecall.MSG2CH.get("r2")),
+                "表情回复前置：浏览落账已建立 消息id→会话 映射");
+        // 贴表情(CreateReactionRequest(message_id="r1", type="OK")) → 触发该会话重放
+        final int base21 = replayed[0];
+        new AntiRecall.ReactionHook().intercept(new FakeChain(readReqCtor, null, new Object[]{ "r1", "OK" }, null));
+        check(replayed[0] == base21 + 1 && repArgs[1] instanceof FakeMPkt
+                        && ((FakeMPkt) repArgs[1]).idsList().containsAll(Arrays.asList("r1", "r2"))
+                        && AntiRecall.KN_STATE.get("123456789") == null,
+                "表情回复：贴表情触发该会话全部已浏览消息重放");
+        // 未映射的 message_id → 不触发(该条由表情 RPC 自行标读, 其余维持未读语义)
+        new AntiRecall.ReactionHook().intercept(new FakeChain(readReqCtor, null, new Object[]{ "zzz-unknown", "OK" }, null));
+        check(replayed[0] == base21 + 1, "表情回复：未映射 message_id 不触发");
 
         // ── 收尾：还原全局状态，避免影响同 JVM 其它用例 ──
         Config.antiread = false;

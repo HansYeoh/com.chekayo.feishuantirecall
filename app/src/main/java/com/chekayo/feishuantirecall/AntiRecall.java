@@ -745,6 +745,10 @@ public class AntiRecall {
     }
     static final java.util.concurrent.ConcurrentHashMap<String, KnState> KN_STATE =
             new java.util.concurrent.ConcurrentHashMap<String, KnState>();
+    /** 消息 id → 会话 id 映射(浏览落账时记录, 表情回复按 message_id 反查会话触发重放);
+        超限整体清空(表情回复的对象几乎总是近期消息)。 */
+    static final java.util.concurrent.ConcurrentHashMap<String, String> MSG2CH =
+            new java.util.concurrent.ConcurrentHashMap<String, String>();
     /** Kn 入口的线程槽 {impl, m, cb}: 截获暂存, 由同线程紧随其后的读请求构造按会话落账并消费。 */
     static final ThreadLocal<Object[]> CURRENT_KN = new ThreadLocal<Object[]>();
     /** 重放期间置位: 本模块的 readreq ctor hook 与 Kn 截获 hook 原样直通, 防重放请求再被清空/自捕获。 */
@@ -1062,6 +1066,14 @@ public class AntiRecall {
                   alog("antiread2: 发送开窗 hook " + sc); }
             catch (Throwable t) { alog("antiread2: 发送类 " + sc + " 不存在: " + t); }
         }
+        // 表情回复触发: CreateReactionRequest(message_id, type) —— 贴表情视同回复, 触发该会话重放。
+        try {
+            HookRuntime.hookAllConstructors(cl.loadClass("com.bytedance.lark.pb.im.v1.CreateReactionRequest"),
+                    "antiread2.reaction", new ReactionHook());
+            alog("antiread2: 表情回复触发 hook CreateReactionRequest");
+        } catch (Throwable t) {
+            alog("antiread2: 表情回复类不存在(该版本无贴表情?): " + t);
+        }
         installKnReplay(cl);   // 失败只禁用主动补报, 载体兜底不受影响
         ANTIREAD2_INSTALLED = true;
         alog("antiread2 installed: hook " + READ_REQ_CLASS + " ctor (antiread=" + Config.antiread
@@ -1085,30 +1097,52 @@ public class AntiRecall {
                     if (e.getValue().longValue() < now - READ_WINDOW_MS) READ_WINDOWS.remove(e.getKey());
                 }
             }
-            if (KN_READY && knMethod != null && !Boolean.TRUE.equals(KN_REPLAY.get())) {
-                try {
-                    if (Config.antiread && TAMPER != 2 && chatKnown) {
-                        // 审计 P2-1 修复: 原子认领 —— 统一会话状态整条 remove, 并发回复不会双取旧缓存,
-                        // 也不会用旧引用误删认领后产生的新缓存。
-                        KnState st = KN_STATE.remove(ch);
-                        if (st != null && !st.pendingIds.isEmpty()) {
-                            PENDING_READ.remove(ch);   // 重放将覆盖同一批 ids, 兜底缓存一并领走防重复
-                            try {
-                                sScheduler.schedule(new ReplayTask(ch, st));
-                            } catch (Throwable schedFail) {
-                                // 审计 P2-6 修复: 调度失败必须归还被认领的缓存
-                                restoreReplayCache(ch, st, st.pendingIds);
-                                alog("重放调度失败(缓存已恢复,走载体兜底): " + describe(schedFail));
-                            }
-                        } else if (st != null) {
-                            KN_STATE.putIfAbsent(ch, st);   // 空批次放回(不覆盖更新的截获)
-                        }
-                    }
-                } catch (Throwable t) {
-                    alog("已读补报处理异常: " + describe(t));
-                }
-            }
+            if (chatKnown) tryClaimAndReplay(ch);
             return chain.proceed();
+        }
+    }
+
+    /** 认领并后台重放指定会话的累加缓存(发送回复与表情回复两个触发源共用);
+        内含全部门控: 通道就绪/重放方法已定夺/卫兵/开关。 */
+    static void tryClaimAndReplay(String ch) {
+        if (!KN_READY || knMethod == null || Boolean.TRUE.equals(KN_REPLAY.get())) return;
+        try {
+            if (!Config.antiread || TAMPER == 2) return;
+            // 审计 P2-1 修复: 原子认领 —— 统一会话状态整条 remove, 并发回复不会双取旧缓存,
+            // 也不会用旧引用误删认领后产生的新缓存。
+            KnState st = KN_STATE.remove(ch);
+            if (st != null && !st.pendingIds.isEmpty()) {
+                PENDING_READ.remove(ch);   // 重放将覆盖同一批 ids, 兜底缓存一并领走防重复
+                try {
+                    sScheduler.schedule(new ReplayTask(ch, st));
+                } catch (Throwable schedFail) {
+                    // 审计 P2-6 修复: 调度失败必须归还被认领的缓存
+                    restoreReplayCache(ch, st, st.pendingIds);
+                    alog("重放调度失败(缓存已恢复,走载体兜底): " + describe(schedFail));
+                }
+            } else if (st != null) {
+                KN_STATE.putIfAbsent(ch, st);   // 空批次放回(不覆盖更新的截获)
+            }
+        } catch (Throwable t) {
+            alog("已读补报处理异常: " + describe(t));
+        }
+    }
+
+    /** 表情回复触发源: CreateReactionRequest(message_id, type) 构造即用户贴了表情 ——
+        经 MSG2CH 反查会话后触发与回复相同的认领重放(表情回复=回复的一种, 用户需求:
+        表情回复后全部已浏览消息立即已读, 而非仅被贴的那条)。消息 id 反查不到(过期映射)
+        时不触发 —— 该条已由表情 RPC 自行标读, 其余消息维持未读语义。 */
+    static class ReactionHook implements XposedInterface.Hooker {
+        @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+            Object[] a = chain.getArgs().toArray();
+            try {
+                if (a.length >= 1 && a[0] instanceof String && !Boolean.TRUE.equals(KN_REPLAY.get())) {
+                    String ch = MSG2CH.get(a[0]);
+                    if (ch != null) tryClaimAndReplay(ch);
+                }
+            } catch (Throwable ignore) {
+            }
+            return chain.proceed(a);
         }
     }
 
@@ -1158,6 +1192,11 @@ public class AntiRecall {
                                         // 审计 P2-1: 单会话状态 compute 原子更新 —— 模板取最新包, ids 累加携带旧批次
                                         KN_STATE.compute(ch, new KnCaptureMerge(kn, origIds));
                                         CURRENT_KN.remove();
+                                        // 表情回复反查映射: 本批浏览的 message_id → 会话
+                                        for (Object o : origIds) {
+                                            if (o instanceof String) MSG2CH.put((String) o, ch);
+                                        }
+                                        if (MSG2CH.size() > 4000) MSG2CH.clear();   // 近期消息才是表情回复对象
                                         if (knLearnPending) learnKnMethodFromStack();   // 栈上认领重放方法(与本落账同调用)
                                         int ck = READ_LOG_COUNT.incrementAndGet();
                                         if (ck <= 200) alog("Kn截获 ch=" + ch + " +" + origIds.size()
