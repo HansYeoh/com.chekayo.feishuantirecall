@@ -772,14 +772,16 @@ public class AntiRecall {
     }
 
     /** 兜底暂存追加合并函数(具名类, 审计 P2 补充): 追加必须在 compute 内会话级原子完成 ——
-        map 外修改共享 LinkedHashSet 会与原子 remove 消费交错导致新 ids 永久丢失; 顺手执行 500 上限。 */
+        map 外修改共享 LinkedHashSet 会与原子 remove 消费交错导致新 ids 永久丢失; 顺手执行 500 上限。
+        复审 P2: 接收 Iterable<?> 并逐项 instanceof String 过滤 —— 泛型标注 Iterable<String> 会让
+        编译器插入逐元素 checkcast, 单个异类元素抛 CCE 会使整批绕过清空(旧实现的防御性被丢失)。 */
     private static final class PendingMerge implements java.util.function.BiFunction<String, java.util.LinkedHashSet<String>, java.util.LinkedHashSet<String>> {
-        final java.lang.Iterable<String> newIds;
-        PendingMerge(java.lang.Iterable<String> newIds) { this.newIds = newIds; }
+        final java.lang.Iterable<?> newIds;
+        PendingMerge(java.lang.Iterable<?> newIds) { this.newIds = newIds; }
         @Override public java.util.LinkedHashSet<String> apply(String k, java.util.LinkedHashSet<String> prev) {
             java.util.LinkedHashSet<String> set = (prev == null)
                     ? new java.util.LinkedHashSet<String>() : prev;
-            for (String id : newIds) set.add(id);
+            for (Object o : newIds) if (o instanceof String) set.add((String) o);
             java.util.Iterator<String> it = set.iterator();
             while (set.size() > 500 && it.hasNext()) { it.next(); it.remove(); }
             return set;

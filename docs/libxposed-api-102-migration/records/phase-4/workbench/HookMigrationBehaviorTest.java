@@ -619,15 +619,51 @@ public class HookMigrationBehaviorTest {
                         && AntiRecall.KN_STATE.get("123456789").pendingIds.contains("d-first"),
                 "P2-4：持续降级下未补齐部分持续保留(不消失)");
 
-        // ── 收尾：还原全局状态，避免影响同 JVM 其它用例 ──
-        // ── 20. 审计补充回归：PENDING_READ 追加/消费竞态 —— 并发浏览 + 载体原子消费, 零丢失不变量 ──
-        // 复现审计反例的交错(浏览线程 get 后暂停/载体 remove/浏览线程写脱离 map 的旧集合)在
-        // compute 化后不再可能: 追加全部在会话级原子完成。本断言验证不变量: 并发追加的每一条 id
-        // 要么已被载体消费、要么仍在暂存, 两者并集恰为全部追加(无丢失无重复)。
+        // ── 20. 审计补充回归：PENDING_READ 追加/消费线性化 —— 确定性两种顺序 + 真线程压力, 零丢失 ──
+        // (复审 P3 采纳: 不再用 sleep 碰运气, 两种线性化顺序各自确定性断言 mutex+零丢失;
+        //  另补复审 P2 混合类型列表回归 —— 异类元素不得使整批绕过清空, 仅合并 String。)
         AntiRecall.PENDING_READ.clear();
         AntiRecall.KN_STATE.clear();
         AntiRecall.READ_WINDOWS.clear();
         AntiRecall.KN_READY = false;   // 纯载体兜底模式(审计反例场景)
+        // 顺序1(追加→消费): 追加全部完成后载体原子 remove → consumed 恰为全部, 与剩余互斥
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ new ArrayList<String>(Arrays.asList("o1", "o2")), new FakeChannel(), Long.valueOf(70), null, null, null, null, folds }, null));
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ new ArrayList<String>(Arrays.asList("o3")), new FakeChannel(), Long.valueOf(71), null, null, null, null, folds }, null));
+        LinkedHashSet<String> taken1 = AntiRecall.PENDING_READ.remove("123456789");
+        check(taken1 != null && taken1.containsAll(Arrays.asList("o1", "o2", "o3"))
+                        && AntiRecall.PENDING_READ.get("123456789") == null,
+                "顺序1(追加→消费)：原子 remove 全量消费, 与剩余互斥");
+        // 顺序2(消费→追加): 消费后追加 → consumed 只含已消费, remaining 只含新追加, 互斥
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ new ArrayList<String>(Arrays.asList("c1")), new FakeChannel(), Long.valueOf(72), null, null, null, null, folds }, null));
+        LinkedHashSet<String> taken2 = AntiRecall.PENDING_READ.remove("123456789");
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ new ArrayList<String>(Arrays.asList("n1", "n2")), new FakeChannel(), Long.valueOf(73), null, null, null, null, folds }, null));
+        LinkedHashSet<String> rem2 = AntiRecall.PENDING_READ.get("123456789");
+        check(taken2 != null && taken2.contains("c1") && rem2 != null
+                        && rem2.containsAll(Arrays.asList("n1", "n2"))
+                        && java.util.Collections.disjoint(taken2, rem2),
+                "顺序2(消费→追加)：消费与新追加互斥, 零丢失");
+        // 复审 P2 复现回归: 混合类型列表(String+异类) → 清空生效 + 仅合并 String, 无 CCE 中止
+        AntiRecall.PENDING_READ.clear();
+        java.util.List<Object> mixed = new ArrayList<Object>();
+        mixed.add("visible-message");
+        mixed.add(Integer.valueOf(7));
+        FakeChain cMix = new FakeChain(readReqCtor, null,
+                new Object[]{ mixed, new FakeChannel(), Long.valueOf(74), null, null, null, null, folds }, null);
+        readHook.intercept(cMix);
+        Object[] aMix = argsOf(cMix);
+        check(((List<?>) aMix[0]).isEmpty()
+                        && AntiRecall.PENDING_READ.get("123456789") != null
+                        && AntiRecall.PENDING_READ.get("123456789").contains("visible-message")
+                        && AntiRecall.PENDING_READ.get("123456789").size() == 1,
+                "复审P2回归：混合类型列表 → 清空生效+仅合并 String(逐项过滤, 无 CCE 中止)");
+        // 真线程压力: 双浏览线程各 100 条并发追加 + 中途原子消费 —— 承诺零丢失(compute 重插可能带来
+        // 已消费 id 的重复上报, 服务端幂等无害), 不承诺 strict mutex(线性化在 remove 之前的 compute
+        // 会把全量集原样重插回 map)。
+        AntiRecall.PENDING_READ.clear();
         final int perThread = 100;
         final java.util.Set<String> appended = java.util.Collections.synchronizedSet(new LinkedHashSet<String>());
         final AntiRecall.ReadReqHook hookRef = readHook;
@@ -665,9 +701,7 @@ public class HookMigrationBehaviorTest {
         union.addAll(consumed);
         if (AntiRecall.PENDING_READ.get("123456789") != null) union.addAll(AntiRecall.PENDING_READ.get("123456789"));
         check(union.size() == 200 && union.containsAll(appended),
-                "竞态回归：200 条并发浏览追加在载体原子消费下零丢失(已消费∪剩余=全部追加)");
-        AntiRecall.PENDING_READ.clear();
-        AntiRecall.KN_READY = false;
+                "真线程压力：200 条并发追加在载体原子消费下零丢失(已消费∪剩余⊇全部追加)");
 
         // ── 收尾：还原全局状态，避免影响同 JVM 其它用例 ──
         Config.antiread = false;
