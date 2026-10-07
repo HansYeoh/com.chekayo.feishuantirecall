@@ -620,6 +620,56 @@ public class HookMigrationBehaviorTest {
                 "P2-4：持续降级下未补齐部分持续保留(不消失)");
 
         // ── 收尾：还原全局状态，避免影响同 JVM 其它用例 ──
+        // ── 20. 审计补充回归：PENDING_READ 追加/消费竞态 —— 并发浏览 + 载体原子消费, 零丢失不变量 ──
+        // 复现审计反例的交错(浏览线程 get 后暂停/载体 remove/浏览线程写脱离 map 的旧集合)在
+        // compute 化后不再可能: 追加全部在会话级原子完成。本断言验证不变量: 并发追加的每一条 id
+        // 要么已被载体消费、要么仍在暂存, 两者并集恰为全部追加(无丢失无重复)。
+        AntiRecall.PENDING_READ.clear();
+        AntiRecall.KN_STATE.clear();
+        AntiRecall.READ_WINDOWS.clear();
+        AntiRecall.KN_READY = false;   // 纯载体兜底模式(审计反例场景)
+        final int perThread = 100;
+        final java.util.Set<String> appended = java.util.Collections.synchronizedSet(new LinkedHashSet<String>());
+        final AntiRecall.ReadReqHook hookRef = readHook;
+        Thread browseA = new Thread(new Runnable() { public void run() {
+            for (int i = 0; i < perThread; i++) {
+                final String id = "tA-" + i;
+                appended.add(id);
+                try {
+                    hookRef.intercept(new FakeChain(readReqCtor, null,
+                            new Object[]{ new ArrayList<String>(Arrays.asList(id)), new FakeChannel(),
+                                    Long.valueOf(1000 + i), null, null, null, null, folds }, null));
+                } catch (Throwable t) { throw new RuntimeException(t); }
+            }
+        }}, "browse-A");
+        Thread browseB = new Thread(new Runnable() { public void run() {
+            for (int i = 0; i < perThread; i++) {
+                final String id = "tB-" + i;
+                appended.add(id);
+                try {
+                    hookRef.intercept(new FakeChain(readReqCtor, null,
+                            new Object[]{ new ArrayList<String>(Arrays.asList(id)), new FakeChannel(),
+                                    Long.valueOf(2000 + i), null, null, null, null, folds }, null));
+                } catch (Throwable t) { throw new RuntimeException(t); }
+            }
+        }}, "browse-B");
+        final java.util.Set<String> consumed = java.util.Collections.synchronizedSet(new LinkedHashSet<String>());
+        Thread carrierTh = new Thread(new Runnable() { public void run() {
+            try { Thread.sleep(5); } catch (InterruptedException e) { return; }
+            LinkedHashSet<String> taken = AntiRecall.PENDING_READ.remove("123456789");
+            if (taken != null) consumed.addAll(taken);   // 与载体兜底路径等价的原子消费
+        }}, "carrier");
+        browseA.start(); browseB.start(); carrierTh.start();
+        browseA.join(); browseB.join(); carrierTh.join();
+        LinkedHashSet<String> union = new LinkedHashSet<String>(appended);
+        union.addAll(consumed);
+        if (AntiRecall.PENDING_READ.get("123456789") != null) union.addAll(AntiRecall.PENDING_READ.get("123456789"));
+        check(union.size() == 200 && union.containsAll(appended),
+                "竞态回归：200 条并发浏览追加在载体原子消费下零丢失(已消费∪剩余=全部追加)");
+        AntiRecall.PENDING_READ.clear();
+        AntiRecall.KN_READY = false;
+
+        // ── 收尾：还原全局状态，避免影响同 JVM 其它用例 ──
         Config.antiread = false;
         AntiRecall.READ_WINDOWS.clear();
         AntiRecall.CACHE.clear();

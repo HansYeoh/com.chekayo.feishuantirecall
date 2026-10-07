@@ -771,6 +771,21 @@ public class AntiRecall {
         }
     }
 
+    /** 兜底暂存追加合并函数(具名类, 审计 P2 补充): 追加必须在 compute 内会话级原子完成 ——
+        map 外修改共享 LinkedHashSet 会与原子 remove 消费交错导致新 ids 永久丢失; 顺手执行 500 上限。 */
+    private static final class PendingMerge implements java.util.function.BiFunction<String, java.util.LinkedHashSet<String>, java.util.LinkedHashSet<String>> {
+        final java.lang.Iterable<String> newIds;
+        PendingMerge(java.lang.Iterable<String> newIds) { this.newIds = newIds; }
+        @Override public java.util.LinkedHashSet<String> apply(String k, java.util.LinkedHashSet<String> prev) {
+            java.util.LinkedHashSet<String> set = (prev == null)
+                    ? new java.util.LinkedHashSet<String>() : prev;
+            for (String id : newIds) set.add(id);
+            java.util.Iterator<String> it = set.iterator();
+            while (set.size() > 500 && it.hasNext()) { it.next(); it.remove(); }
+            return set;
+        }
+    }
+
     /** 一次重放任务(后台线程执行): 模板 ids 原地替换为合并全集 → Kn 重放。
         审计 P2-4: 访问器不可用/列表不可变时按最后一次包原样重放, 未补齐的部分必须恢复给兜底/下次重试。 */
     static final class ReplayTask implements Runnable {
@@ -818,9 +833,7 @@ public class AntiRecall {
     private static void restoreReplayCache(String ch, KnState st, java.util.LinkedHashSet<String> batch) {
         try {
             KN_STATE.compute(ch, new KnRestoreMerge(st, batch));
-            java.util.LinkedHashSet<String> pr = PENDING_READ.get(ch);
-            if (pr == null) { pr = new java.util.LinkedHashSet<String>(); PENDING_READ.put(ch, pr); }
-            pr.addAll(batch);
+            PENDING_READ.compute(ch, new PendingMerge(batch));   // 兜底暂存原子回填(含 500 上限)
         } catch (Throwable ignore) {
         }
     }
@@ -840,7 +853,7 @@ public class AntiRecall {
         }
     }
 
-    /** 恢复合并函数(具名类): 状态不存在则整体放回, 存在则失败批次并入其待重放集。 */
+    /** 恢复合并函数(具名类): 状态不存在则整体放回, 存在则失败批次并入其待重放集(含 500 上限)。 */
     private static final class KnRestoreMerge implements java.util.function.BiFunction<String, KnState, KnState> {
         final KnState back;
         final java.util.LinkedHashSet<String> batch;
@@ -852,6 +865,8 @@ public class AntiRecall {
                 return fresh;
             }
             cur.pendingIds.addAll(batch);   // 已有更新截获: 失败批次并入其待重放集, 绝不丢弃
+            java.util.Iterator<String> it = cur.pendingIds.iterator();
+            while (cur.pendingIds.size() > 500 && it.hasNext()) { it.next(); it.remove(); }
             return cur;
         }
     }
@@ -1129,11 +1144,9 @@ public class AntiRecall {
                             // 纯浏览: 暂存被抑制的 message_ids(按会话, 上限500), 再清空本次上报。
                             if (a[0] instanceof java.util.List && !((java.util.List) a[0]).isEmpty()) {
                                 java.util.List origIds = (java.util.List) a[0];   // v2.4: 原始 ids 引用(Kn 重放缓存样本)
-                                java.util.LinkedHashSet<String> buf = PENDING_READ.get(ch);
-                                if (buf == null) { buf = new java.util.LinkedHashSet<String>(); PENDING_READ.put(ch, buf); }
-                                for (Object o : origIds) if (o instanceof String) buf.add((String) o);
-                                java.util.Iterator<String> it = buf.iterator();
-                                while (buf.size() > 500 && it.hasNext()) { it.next(); it.remove(); }
+                                // 审计 P2 补充: 追加必须在 compute 内会话级原子完成 —— get 后写与原子 remove
+                                // 消费交错时, 新 ids 会写进已脱离 map 的旧集合而永久丢失。
+                                PENDING_READ.compute(ch, new PendingMerge(origIds));
                                 a[0] = new java.util.ArrayList<String>();
                                 // v2.4 Kn 落账: 线程槽里的 {impl,m,cb} 按本构造的会话 id 落账并消费。
                                 // 会话 id(a[1])与 ids(a[0] 原始引用)都来自构造参数 —— 稳定 pb 类, 无混淆依赖。
