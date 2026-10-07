@@ -709,7 +709,8 @@ public class AntiRecall {
         "com.bytedance.lark.pb.im.v1.SendMessageRequest",       // 实际发送
         "com.bytedance.lark.pb.im.v1.CreateQuasiMessageRequest" // 本地乐观回显(点发送即触发, 更早)
     };
-    static volatile long READ_WINDOW = 0;   // "刚发送"窗口截止(ms); 窗口内的已读上报放行 -> 回复才已读
+    static final java.util.concurrent.ConcurrentHashMap<String, Long> READ_WINDOWS =
+            new java.util.concurrent.ConcurrentHashMap<String, Long>();   // 按会话的"刚发送"窗口截止(ms)
     static final long READ_WINDOW_MS = 2500;
     // 安卓已读模型: 浏览时用 message_ids 上报(被本模块抑制), 回复时飞书只推 max_position。
     // 7.70 时代回复窗口内尚有"只带 max_position 的载体"可把暂存 ids 补回去放行; 8.1.12 真机
@@ -733,19 +734,23 @@ public class AntiRecall {
     static final String IM_MSG_SERVICE_V2 = "com.ss.android.lark.im.sdk.service.ImSdkMessageServiceImplV2";
     static final String KN_CB_CLASS = "com.larksuite.framework.callback.IGetDataCallback";
     /** 按会话累加的截获 ids(上次回复以来的并集, 上限500); ctx 按会话存重放模板 {impl, m, cb, ids样本}。 */
-    static final java.util.concurrent.ConcurrentHashMap<String, java.util.LinkedHashSet<String>> KN_IDS =
-            new java.util.concurrent.ConcurrentHashMap<String, java.util.LinkedHashSet<String>>();
-    static final java.util.concurrent.ConcurrentHashMap<String, Object[]> KN_CTX =
-            new java.util.concurrent.ConcurrentHashMap<String, Object[]>();
+    /** 审计 P2-1 修复: 单会话重放缓存统一为 KnState —— 认领=整条 map.remove 原子完成, 并发回复
+        不会双取旧缓存, 也不会用旧引用误删认领后产生的新缓存。 */
+    static final class KnState {
+        final Object impl, m, cb, idsSample;   // 重放模板(最新截获包)
+        final java.util.LinkedHashSet<String> pendingIds = new java.util.LinkedHashSet<String>(); // 待重放累加(上限500)
+        KnState(Object impl, Object m, Object cb, Object idsSample) {
+            this.impl = impl; this.m = m; this.cb = cb; this.idsSample = idsSample;
+        }
+    }
+    static final java.util.concurrent.ConcurrentHashMap<String, KnState> KN_STATE =
+            new java.util.concurrent.ConcurrentHashMap<String, KnState>();
     /** Kn 入口的线程槽 {impl, m, cb}: 截获暂存, 由同线程紧随其后的读请求构造按会话落账并消费。 */
     static final ThreadLocal<Object[]> CURRENT_KN = new ThreadLocal<Object[]>();
     /** 重放期间置位: 本模块的 readreq ctor hook 与 Kn 截获 hook 原样直通, 防重放请求再被清空/自捕获。 */
     static final ThreadLocal<Boolean> KN_REPLAY = new ThreadLocal<Boolean>();
     static volatile boolean KN_READY = false;
     static volatile java.lang.reflect.Method knMethod;
-    /** 模板 m 的 ids 访问器(首次重放前按样本关联定位一次); knAccTried=false 表示未尝试。 */
-    static volatile java.lang.reflect.Method knAccIds;
-    static volatile boolean knAccTried = false;
 
     /** Kn 重放出口: 生产=反射 Kn.invoke(impl, m, callback); 测试注入 fake 捕获。 */
     interface KnReplayer { void replay(Object impl, Object m, Object cb) throws Throwable; }
@@ -766,33 +771,41 @@ public class AntiRecall {
         }
     }
 
-    /** 一次重放任务(后台线程执行): 模板 ids 原地替换为合并全集 → Kn 重放; 失败把缓存放回走载体兜底。 */
+    /** 一次重放任务(后台线程执行): 模板 ids 原地替换为合并全集 → Kn 重放。
+        审计 P2-4: 访问器不可用/列表不可变时按最后一次包原样重放, 未补齐的部分必须恢复给兜底/下次重试。 */
     static final class ReplayTask implements Runnable {
         final String ch;
-        final Object[] ctx;   // {impl, m, cb, ids样本}
-        final java.util.LinkedHashSet<String> merged;
-        ReplayTask(String ch, Object[] ctx, java.util.LinkedHashSet<String> merged) {
-            this.ch = ch; this.ctx = ctx; this.merged = merged;
-        }
+        final KnState st;
+        ReplayTask(String ch, KnState st) { this.ch = ch; this.st = st; }
         @Override public void run() {
             KN_REPLAY.set(Boolean.TRUE);
             try {
-                if (!resolveIdsAccessor(ctx)) {
+                if (!resolveIdsAccessor(st.m, st.idsSample)) {
                     alog("重放模板 ids 访问器无法唯一定位, 按最后一次包原样重放");
                 }
+                boolean mergedIn = false;
+                java.util.List sent = null;
                 if (knAccIds != null) {
                     try {
-                        java.util.List slot = (java.util.List) knAccIds.invoke(ctx[1]);
-                        if (slot != null) { slot.clear(); slot.addAll(merged); }
+                        java.util.List slot = (java.util.List) knAccIds.invoke(st.m);
+                        if (slot != null) {
+                            sent = new java.util.ArrayList(slot);
+                            slot.clear();
+                            slot.addAll(st.pendingIds);
+                            mergedIn = true;
+                        }
                     } catch (Throwable t) {
                         alog("重放模板 ids 列表处理失败(按最后一次包原样重放): " + describe(t));
                     }
                 }
-                sReplayer.replay(ctx[0], ctx[1], ctx[2]);
+                sReplayer.replay(st.impl, st.m, st.cb);
                 int c = READ_LOG_COUNT.incrementAndGet();
-                if (c <= 200) alog("READ_REQ 已读补报(重放," + merged.size() + "条) ch=" + ch);
+                if (c <= 200) alog("READ_REQ 已读补报(重放," + (mergedIn ? st.pendingIds.size() : -1) + "条) ch=" + ch);
+                if (!mergedIn) {
+                    restoreReplayCache(ch, st, st.pendingIds);   // 降级未补齐: 全批保留给兜底/下次重试
+                }
             } catch (Throwable t) {
-                restoreReplayCache(ch, ctx, merged);
+                restoreReplayCache(ch, st, st.pendingIds);
                 alog("已读补报失败(缓存恢复,走载体兜底): " + describe(t));
             } finally {
                 KN_REPLAY.set(Boolean.FALSE);
@@ -800,28 +813,63 @@ public class AntiRecall {
         }
     }
 
-    /** 重放失败后的缓存恢复: 模板/累加集放回(不覆盖更新的截获), 兜底暂存同步回填。 */
-    private static void restoreReplayCache(String ch, Object[] ctx, java.util.LinkedHashSet<String> merged) {
+    /** 重放失败/降级后的缓存恢复(审计 P2-2): 模板放回(若期间无更新截获); 失败批次 ids **无条件**并入
+        最新状态的待重放集合与兜底暂存 —— 有新截获时旧批次也不得丢失。 */
+    private static void restoreReplayCache(String ch, KnState st, java.util.LinkedHashSet<String> batch) {
         try {
-            if (KN_CTX.putIfAbsent(ch, ctx) == null) {
-                java.util.LinkedHashSet<String> idsBack = KN_IDS.get(ch);
-                if (idsBack == null) { idsBack = new java.util.LinkedHashSet<String>(); KN_IDS.put(ch, idsBack); }
-                idsBack.addAll(merged);
-            }
+            KN_STATE.compute(ch, new KnRestoreMerge(st, batch));
             java.util.LinkedHashSet<String> pr = PENDING_READ.get(ch);
             if (pr == null) { pr = new java.util.LinkedHashSet<String>(); PENDING_READ.put(ch, pr); }
-            pr.addAll(merged);
+            pr.addAll(batch);
         } catch (Throwable ignore) {
         }
     }
 
+    /** 落账合并函数(具名类, -source 8 无 LambdaMetafactory): 模板取最新包, ids 累加携带旧批次。 */
+    private static final class KnCaptureMerge implements java.util.function.BiFunction<String, KnState, KnState> {
+        final Object[] kn;
+        final java.util.List origIds;
+        KnCaptureMerge(Object[] kn, java.util.List origIds) { this.kn = kn; this.origIds = origIds; }
+        @Override public KnState apply(String k, KnState prev) {
+            KnState st = new KnState(kn[0], kn[1], kn[2], origIds);
+            if (prev != null) st.pendingIds.addAll(prev.pendingIds);
+            for (Object o : origIds) if (o instanceof String) st.pendingIds.add((String) o);
+            java.util.Iterator<String> it2 = st.pendingIds.iterator();
+            while (st.pendingIds.size() > 500 && it2.hasNext()) { it2.next(); it2.remove(); }
+            return st;
+        }
+    }
+
+    /** 恢复合并函数(具名类): 状态不存在则整体放回, 存在则失败批次并入其待重放集。 */
+    private static final class KnRestoreMerge implements java.util.function.BiFunction<String, KnState, KnState> {
+        final KnState back;
+        final java.util.LinkedHashSet<String> batch;
+        KnRestoreMerge(KnState back, java.util.LinkedHashSet<String> batch) { this.back = back; this.batch = batch; }
+        @Override public KnState apply(String k, KnState cur) {
+            if (cur == null) {
+                KnState fresh = new KnState(back.impl, back.m, back.cb, back.idsSample);
+                fresh.pendingIds.addAll(batch);
+                return fresh;
+            }
+            cur.pendingIds.addAll(batch);   // 已有更新截获: 失败批次并入其待重放集, 绝不丢弃
+            return cur;
+        }
+    }
+
     /** Kn 入口截获(v2.4 最简形态): 只缓存 {impl, m, cb} 到线程槽; 会话 id 与真实 ids 都在紧随其后的
-        读请求构造参数里, 由 ReadReqHook 按会话落账并消费 —— 不调用 m 的任何混淆访问器。 */
+        读请求构造参数里, 由 ReadReqHook 按会话落账并消费 —— 不调用 m 的任何混淆访问器。
+        审计 P2-5: 保存旧槽并在 finally 恢复 —— 候选未构造读请求就返回时, 线程槽不被过期模板污染(兼顾嵌套)。 */
     static class KnCaptureHook implements XposedInterface.Hooker {
         @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
             Object[] a = chain.getArgs().toArray();
             if (a.length >= 2 && !Boolean.TRUE.equals(KN_REPLAY.get())) {
+                Object[] prev = CURRENT_KN.get();
                 CURRENT_KN.set(new Object[]{ chain.getThisObject(), a[0], a.length > 1 ? a[1] : null });
+                try {
+                    return chain.proceed(a);
+                } finally {
+                    CURRENT_KN.set(prev);
+                }
             }
             return chain.proceed(a);
         }
@@ -905,32 +953,41 @@ public class AntiRecall {
         }
     }
 
-    /** 一次性定位模板 m 的 ids 访问器: m 的无参实例 List 方法中, 返回列表与样本(ctx[3])同引用或同内容者;
-        多义/零命中都算失败(永久降级原样重放, 不反复尝试)。 */
-    private static boolean resolveIdsAccessor(Object[] ctx) {
-        if (knAccTried) return knAccIds != null;
-        knAccTried = true;
-        Object mPkt = ctx[1], sample = ctx[3];
-        if (mPkt == null || !(sample instanceof java.util.List)) return false;
-        java.util.List sampleList = (java.util.List) sample;
-        java.lang.reflect.Method hit = null;
-        for (java.lang.reflect.Method mm : mPkt.getClass().getMethods()) {
-            if (mm.getParameterTypes().length != 0
-                    || java.lang.reflect.Modifier.isStatic(mm.getModifiers())
-                    || !java.util.List.class.equals(mm.getReturnType())) continue;
-            try {
-                Object v = mm.invoke(mPkt);
-                if (v == sampleList || sampleList.equals(v)) {
-                    if (hit != null) return false;   // 多义 → 保守失败
-                    hit = mm;
+    /** 定位模板 m 的 ids 访问器(审计 P2-3): 扫描与结果发布在同一把锁内原子完成 —— 并发重放线程
+        等待初始化结束后取结果, 不存在"已尝试但未发布"的中间态; 定位失败为永久降级(原样重放)。 */
+    private static final Object KN_ACC_LOCK = new Object();
+    static volatile boolean knAccResolved = false;
+    static volatile java.lang.reflect.Method knAccIds;
+
+    private static boolean resolveIdsAccessor(Object mPkt, Object sample) {
+        synchronized (KN_ACC_LOCK) {
+            if (!knAccResolved) {
+                knAccResolved = true;   // 只扫一次; 成败在本锁内原子发布
+                if (mPkt != null && sample instanceof java.util.List) {
+                    java.util.List sampleList = (java.util.List) sample;
+                    java.lang.reflect.Method hit = null;
+                    for (java.lang.reflect.Method mm : mPkt.getClass().getMethods()) {
+                        if (mm.getParameterTypes().length != 0
+                                || java.lang.reflect.Modifier.isStatic(mm.getModifiers())
+                                || !java.util.List.class.equals(mm.getReturnType())) continue;
+                        try {
+                            Object v = mm.invoke(mPkt);
+                            if (v == sampleList || sampleList.equals(v)) {
+                                if (hit != null) { hit = null; break; }   // 多义 → 保守失败
+                                hit = mm;
+                            }
+                        } catch (Throwable ignore) {
+                        }
+                    }
+                    if (hit != null) {
+                        hit.setAccessible(true);
+                        knAccIds = hit;
+                    }
                 }
-            } catch (Throwable ignore) {
+                if (knAccIds == null) alog("重放模板 ids 访问器无法唯一定位, 重放降级为最后一次包原样发送");
             }
+            return knAccIds != null;
         }
-        if (hit == null) return false;
-        hit.setAccessible(true);
-        knAccIds = hit;
-        return true;
     }
 
     /** 展开调用链到根因, 附栈顶 3 帧 —— Method.invoke 的 ITE 不展开根因等于白记。 */
@@ -1001,22 +1058,37 @@ public class AntiRecall {
     // 反射/网络链都在后台)。
     static class SendReqHook implements XposedInterface.Hooker {
         @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            READ_WINDOW = System.currentTimeMillis() + READ_WINDOW_MS;
+            long now = System.currentTimeMillis();
+            String ch = replyChannelId(chain.getArgs().toArray());
+            boolean chatKnown = ch != null && !"?".equals(ch);
+            if (Config.antiread && TAMPER != 2 && chatKnown) {
+                // 审计 P1 修复: 窗口按会话记录 —— 回复 B 只开 B 的窗口, 不再放行 A 的浏览请求
+                READ_WINDOWS.put(ch, Long.valueOf(now + READ_WINDOW_MS));
+                for (java.util.Map.Entry<String, Long> e : READ_WINDOWS.entrySet()) {
+                    if (e.getValue().longValue() < now - READ_WINDOW_MS) READ_WINDOWS.remove(e.getKey());
+                }
+            }
             if (KN_READY && knMethod != null && !Boolean.TRUE.equals(KN_REPLAY.get())) {
                 try {
-                    String ch = replyChannelId(chain.getArgs().toArray());
-                    Object[] ctx = ch == null ? null : KN_CTX.get(ch);
-                    java.util.LinkedHashSet<String> merged = ch == null ? null : KN_IDS.get(ch);
-                    if (ctx != null && merged != null && !merged.isEmpty()
-                            && Config.antiread && TAMPER != 2) {
-                        // 同步认领(防异步窗口内二次回复重复重放), 重放整体后台化
-                        KN_CTX.remove(ch);
-                        KN_IDS.remove(ch);
-                        PENDING_READ.remove(ch);   // 重放将覆盖同一批 ids, 兜底缓存一并领走防重复
-                        sScheduler.schedule(new ReplayTask(ch, ctx, merged));
+                    if (Config.antiread && TAMPER != 2 && chatKnown) {
+                        // 审计 P2-1 修复: 原子认领 —— 统一会话状态整条 remove, 并发回复不会双取旧缓存,
+                        // 也不会用旧引用误删认领后产生的新缓存。
+                        KnState st = KN_STATE.remove(ch);
+                        if (st != null && !st.pendingIds.isEmpty()) {
+                            PENDING_READ.remove(ch);   // 重放将覆盖同一批 ids, 兜底缓存一并领走防重复
+                            try {
+                                sScheduler.schedule(new ReplayTask(ch, st));
+                            } catch (Throwable schedFail) {
+                                // 审计 P2-6 修复: 调度失败必须归还被认领的缓存
+                                restoreReplayCache(ch, st, st.pendingIds);
+                                alog("重放调度失败(缓存已恢复,走载体兜底): " + describe(schedFail));
+                            }
+                        } else if (st != null) {
+                            KN_STATE.putIfAbsent(ch, st);   // 空批次放回(不覆盖更新的截获)
+                        }
                     }
                 } catch (Throwable t) {
-                    alog("已读补报失败(缓存保留,走载体兜底): " + describe(t));
+                    alog("已读补报处理异常: " + describe(t));
                 }
             }
             return chain.proceed();
@@ -1035,8 +1107,10 @@ public class AntiRecall {
             try {
                 // KN_REPLAY 置位 = 本模块正在重放浏览上报, 原样直通(真实 ids 不得再被清空)
                 if (a != null && a.length >= 8 && !Boolean.TRUE.equals(KN_REPLAY.get())) {
-                    boolean inSendWindow = System.currentTimeMillis() < READ_WINDOW;
                     String ch = channelId(a.length > 1 ? a[1] : null);
+                    // 审计 P1 修复: 窗口按会话记录 —— 回复 B 开的窗口不再放行 A 的浏览请求
+                    boolean inSendWindow = System.currentTimeMillis()
+                            < READ_WINDOWS.getOrDefault(ch, Long.valueOf(0L)).longValue();
                     int midsBefore = (a[0] instanceof java.util.List) ? ((java.util.List) a[0]).size() : -1;
 
                     if (Config.antiread && TAMPER != 2) {
@@ -1066,16 +1140,13 @@ public class AntiRecall {
                                 if (KN_READY && !Boolean.TRUE.equals(KN_REPLAY.get())) {
                                     Object[] kn = CURRENT_KN.get();
                                     if (kn != null) {
-                                        java.util.LinkedHashSet<String> acc = KN_IDS.get(ch);
-                                        if (acc == null) { acc = new java.util.LinkedHashSet<String>(); KN_IDS.put(ch, acc); }
-                                        for (Object o : origIds) if (o instanceof String) acc.add((String) o);
-                                        java.util.Iterator<String> it2 = acc.iterator();
-                                        while (acc.size() > 500 && it2.hasNext()) { it2.next(); it2.remove(); }
-                                        KN_CTX.put(ch, new Object[]{ kn[0], kn[1], kn[2], origIds });
+                                        // 审计 P2-1: 单会话状态 compute 原子更新 —— 模板取最新包, ids 累加携带旧批次
+                                        KN_STATE.compute(ch, new KnCaptureMerge(kn, origIds));
                                         CURRENT_KN.remove();
                                         if (knLearnPending) learnKnMethodFromStack();   // 栈上认领重放方法(与本落账同调用)
                                         int ck = READ_LOG_COUNT.incrementAndGet();
-                                        if (ck <= 200) alog("Kn截获 ch=" + ch + " +" + origIds.size() + " (累计" + acc.size() + ")");
+                                        if (ck <= 200) alog("Kn截获 ch=" + ch + " +" + origIds.size()
+                                                + " (累计" + KN_STATE.get(ch).pendingIds.size() + ")");
                                     }
                                 }
                             }

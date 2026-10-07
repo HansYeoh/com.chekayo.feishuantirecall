@@ -20,13 +20,13 @@ import java.util.List;
  * 1. ReadReqHook（构造器 hook，before 改参）：
  *    浏览路径清空 message_ids/fold_ids 并暂存；回复窗口路径合并回填；开关关时原参透传；
  *    短参数构造安全放行。
- * 2. SendReqHook（构造器 hook，纯副作用）：READ_WINDOW 开窗。
- * 9~15. v2.4 回复即已读·签名发现 + Kn 截获重放（feat/read-as-unread）：Kn 按签名形状唯一
- *    定位（过滤参数个数/回调类型/static/返回类型干扰项，双命中保守 null）；截获只落线程槽、
- *    由读请求构造按会话落账（KN_IDS 累加多包不丢/KN_CTX 模板+ids 样本）；重放时按样本关联
- *    定位 ids 访问器（区分双 List）→ 模板列表原地替换为累加全集 → 重放一次并清缓存；
- *    失败保留可重试、按会话隔离、开关关/通道未就绪不触发、KN_REPLAY 卫兵三直通、
- *    重放后载体兜底路径幂等。
+ * 2. SendReqHook（构造器 hook，纯副作用）：按会话 READ_WINDOWS 开窗。
+ * 9~19. v2.4/v2.5 回复即已读·签名发现 + Kn 截获重放（feat/read-as-unread）：Kn 候选按形状
+ *    全量枚举（过滤干扰项），多义全候选挂截获 + 首次落账时栈定夺重放方法（学习不吃掉浏览）；
+ *    统一会话状态 KnState（审计 P2-1 原子认领）；重放按样本关联定位 ids 访问器（区分双 List，
+ *    审计 P2-3 锁内原子发布）→ 模板列表原地替换为累加全集 → 后台重放一次并清缓存；
+ *    失败批次并入恢复（审计 P2-2）、降级保留未补齐（审计 P2-4）、调度失败归还（审计 P2-6）、
+ *    线程槽 finally 恢复（审计 P2-5）、回复窗口按会话隔离（审计 P1）。
  * 3. InvokeHook（ANTIREAD_DROP=false 现状）：任何命令都放行原调用，不短路。
  * 4. MapperHook（before 反射改对象）：文本入缓存；空文本时回填缓存内容 + 恢复 NORMAL 状态。
  * 5. RestrictedModeUnlock 共享门禁回调：开关开 -> 短路（boolean=false / void=null，原方法不执行）；
@@ -156,10 +156,17 @@ public class HookMigrationBehaviorTest {
     }
 
     public static class FakeMPkt {
+        boolean immutable;
         final java.util.List<String> ids = new ArrayList<String>();
         final java.util.List<String> folds = new ArrayList<String>(Arrays.asList("foldX"));
         public FakeMPkt(String... items) { ids.addAll(Arrays.asList(items)); }
-        public java.util.List<String> idsList() { return ids; }     // 与 foldList 同为 List → 考验样本关联
+        public FakeMPkt(boolean immutable, String... items) {
+            this.immutable = immutable;
+            ids.addAll(Arrays.asList(items));
+        }
+        public java.util.List<String> idsList() {   // 与 foldList 同为 List → 考验样本关联
+            return immutable ? java.util.Collections.unmodifiableList(ids) : ids;
+        }
         public java.util.List<String> foldList() { return folds; }
     }
 
@@ -183,7 +190,7 @@ public class HookMigrationBehaviorTest {
         Method readReqCtor = FakeChain.class.getDeclaredMethods()[0]; // 仅占位，executable 语义不参与断言
 
         // ── 1. ReadReqHook：浏览路径（无发送窗口）清空 message_ids/fold_ids 并暂存 ──
-        AntiRecall.READ_WINDOW = 0;   // 窗口关闭 = 纯浏览
+        AntiRecall.READ_WINDOWS.clear();   // 窗口关闭 = 纯浏览
         Config.antiread = true;
         AntiRecall.TAMPER = 0;
         java.util.List<String> ids = new ArrayList<String>(Arrays.asList("a", "b"));
@@ -203,12 +210,13 @@ public class HookMigrationBehaviorTest {
                 "浏览路径：原 message_ids 按会话暂存（123456789）");
         check(ids.size() == 2, "浏览路径：调用方原 List 不被原地清空（modern 走副本改参）");
 
-        // ── 2. ReadReqHook：回复窗口路径合并回填暂存 ids ──
+        // ── 2. ReadReqHook：回复窗口路径合并回填暂存 ids（窗口按会话记录） ──
         AntiRecall.SendReqHook sendHook = new AntiRecall.SendReqHook();
-        FakeChain cs = new FakeChain(readReqCtor, null, new Object[]{ "msg" }, null);
+        FakeChain cs = new FakeChain(readReqCtor, null, new Object[]{ "123456789" }, null);
         sendHook.intercept(cs);
-        check(System.currentTimeMillis() < AntiRecall.READ_WINDOW,
-                "SendReqHook：拦截发送请求构造后 READ_WINDOW 已开窗");
+        Long win = AntiRecall.READ_WINDOWS.get("123456789");
+        check(win != null && win.longValue() > System.currentTimeMillis(),
+                "SendReqHook：拦截发送请求构造后该会话 READ_WINDOWS 已开窗");
         check(cs.proceedCount == 1, "SendReqHook：构造器仍执行一次");
         java.util.List<String> cur = new ArrayList<String>(Arrays.asList("c"));
         Object[] ctorArgs2 = new Object[]{ cur, new FakeChannel(), Long.valueOf(6), null, null, null, null, folds };
@@ -314,11 +322,10 @@ public class HookMigrationBehaviorTest {
         AntiRecall.knCandidates = amb;
         AntiRecall.knLearnPending = true;
         AntiRecall.KN_READY = true;
-        AntiRecall.KN_CTX.clear();
-        AntiRecall.KN_IDS.clear();
+        AntiRecall.KN_STATE.clear();
         AntiRecall.CURRENT_KN.remove();
         AntiRecall.knMethod = null;
-        AntiRecall.READ_WINDOW = 0;
+        AntiRecall.READ_WINDOWS.clear();
         AntiRecall.KnCaptureHook knCapA = new AntiRecall.KnCaptureHook();
         final Object ambObj = new FakeAmbigImpl();
         final FakeCallback cbObj2 = new FakeCallback();
@@ -326,36 +333,43 @@ public class HookMigrationBehaviorTest {
         final java.util.List<String> ids9 = pkt9.idsList();
         FakeAmbigImpl.ON_KNA = new Runnable() {
             public void run() {
+                // 模拟 KnCaptureHook 已截获落槽(真实路径: hook 在 Kn 的 proceed 内落槽, 构造在其后同线程发生)
+                AntiRecall.CURRENT_KN.set(new Object[]{ ambObj, pkt9, cbObj2 });
                 try {
-                    knCapA.intercept(new FakeChain(readReqCtor, ambObj, new Object[]{ pkt9, cbObj2 }, null));
                     readHook.intercept(new FakeChain(readReqCtor, null,
                             new Object[]{ ids9, new FakeChannel(), Long.valueOf(9), null, null, null, null, folds }, null));
                 } catch (Throwable t) { throw new RuntimeException(t); }
             }
         };
-        new FakeAmbigImpl().knA(pkt9, cbObj2);   // 截获+构造都发生在 knA 帧内
+        new FakeAmbigImpl().knA(pkt9, cbObj2);   // 落账+栈定夺都发生在 knA 帧内
         FakeAmbigImpl.ON_KNA = null;
-        check(AntiRecall.KN_CTX.get("123456789") != null
-                        && AntiRecall.KN_IDS.get("123456789").size() == 2
+        AntiRecall.KnState st9 = AntiRecall.KN_STATE.get("123456789");
+        check(st9 != null && st9.m == pkt9 && st9.impl == ambObj && st9.cb == cbObj2
+                        && st9.idsSample == ids9 && st9.pendingIds.size() == 2
+                        && st9.pendingIds.containsAll(Arrays.asList("m1", "m2"))
                         && AntiRecall.CURRENT_KN.get() == null,
-                "多义：首次浏览即落账(学习不吃掉浏览)");
+                "多义：首次浏览即落账(模板+累加集, 学习不吃掉浏览)");
         check("knA".equals(AntiRecall.knMethod.getName()) && !AntiRecall.knLearnPending,
                 "多义：重放方法由调用栈定夺为真实帧 knA");
+        // 审计 P2-5: Kn 截获的线程槽在调用返回后恢复 —— 不越过调用生命周期污染后续构造
+        knCapA.intercept(new FakeChain(readReqCtor, ambObj, new Object[]{ pkt9, cbObj2 }, null));
+        check(AntiRecall.CURRENT_KN.get() == null,
+                "P2-5：Kn 截获线程槽在调用返回后恢复(不越过调用生命周期)");
 
-        // ── 10. v2.4 截获落账：Kn 线程槽 + 读请求构造按会话落账(KN_IDS 累加/KN_CTX 模板/样本) ──
+        // ── 10. 截获落账：多包拆分累加不丢 + 模板/样本刷新为最新包 ──
         Config.antiread = true;
         AntiRecall.TAMPER = 0;
         AntiRecall.KN_READY = true;
-        AntiRecall.KN_CTX.clear();
-        AntiRecall.KN_IDS.clear();
-        AntiRecall.knAccTried = false;
+        AntiRecall.KN_STATE.clear();
+        AntiRecall.knAccResolved = false;
         AntiRecall.knAccIds = null;
         AntiRecall.KnCaptureHook knCap = new AntiRecall.KnCaptureHook();
         Object implObj = new FakeImpl(), cbObj = new FakeCallback();
-        AntiRecall.READ_WINDOW = 0;   // 强制浏览分支(§2 开的 2.5s 窗口可能仍在)
+        AntiRecall.READ_WINDOWS.clear();   // 强制浏览分支(其他用例开的窗口可能仍在)
         FakeMPkt pkt1 = new FakeMPkt("m1", "m2");
-        knCap.intercept(new FakeChain(readReqCtor, implObj, new Object[]{ pkt1, cbObj }, null));
-        check(AntiRecall.CURRENT_KN.get() != null && AntiRecall.KN_CTX.isEmpty(),
+        // 模拟 KnCaptureHook 已截获落槽(P2-5 语义: 槽生存期=被拦截调用, 测试直接落槽等价)
+        AntiRecall.CURRENT_KN.set(new Object[]{ implObj, pkt1, cbObj });
+        check(AntiRecall.CURRENT_KN.get() != null && AntiRecall.KN_STATE.isEmpty(),
                 "Kn截获：入口只落线程槽(不调用任何混淆访问器)");
         java.util.List<String> ids1 = pkt1.idsList();   // 同一引用进构造参数(builder 直传)
         FakeChain c10a = new FakeChain(readReqCtor, null,
@@ -363,27 +377,25 @@ public class HookMigrationBehaviorTest {
         readHook.intercept(c10a);
         check(AntiRecall.CURRENT_KN.get() == null,
                 "Kn截获：读请求构造落账后线程槽已消费");
-        check(AntiRecall.KN_CTX.get("123456789") != null
-                        && AntiRecall.KN_CTX.get("123456789")[0] == implObj
-                        && AntiRecall.KN_CTX.get("123456789")[1] == pkt1
-                        && AntiRecall.KN_CTX.get("123456789")[3] == ids1,
+        AntiRecall.KnState st10 = AntiRecall.KN_STATE.get("123456789");
+        check(st10 != null && st10.impl == implObj && st10.m == pkt1
+                        && st10.cb == cbObj && st10.idsSample == ids1,
                 "Kn截获：按会话落账 {impl,m,cb,ids样本}(样本=构造参数原列表引用)");
-        LinkedHashSet<String> acc = AntiRecall.KN_IDS.get("123456789");
-        check(acc != null && acc.size() == 2 && acc.containsAll(Arrays.asList("m1", "m2")),
+        check(st10.pendingIds.size() == 2 && st10.pendingIds.containsAll(Arrays.asList("m1", "m2")),
                 "Kn截获：ids 按会话累加(第1包 2条)");
         // 多包拆分: 第2包(模板刷新+累加不丢)
         FakeMPkt pkt2 = new FakeMPkt("m3");
-        knCap.intercept(new FakeChain(readReqCtor, implObj, new Object[]{ pkt2, cbObj }, null));
+        AntiRecall.CURRENT_KN.set(new Object[]{ implObj, pkt2, cbObj });
         java.util.List<String> ids2 = pkt2.idsList();
         readHook.intercept(new FakeChain(readReqCtor, null,
                 new Object[]{ ids2, new FakeChannel(), Long.valueOf(10), null, null, null, null, folds }, null));
-        check(AntiRecall.KN_IDS.get("123456789").size() == 3
-                        && AntiRecall.KN_IDS.get("123456789").containsAll(Arrays.asList("m1", "m2", "m3"))
-                        && AntiRecall.KN_CTX.get("123456789")[1] == pkt2
-                        && AntiRecall.KN_CTX.get("123456789")[3] == ids2,
+        AntiRecall.KnState st10b = AntiRecall.KN_STATE.get("123456789");
+        check(st10b != null && st10b.pendingIds.size() == 3
+                        && st10b.pendingIds.containsAll(Arrays.asList("m1", "m2", "m3"))
+                        && st10b.m == pkt2 && st10b.idsSample == ids2,
                 "Kn截获：多包拆分累加不丢(3条) 且模板/样本刷新为最新包");
 
-        // ── 11. v2.4 重放：样本关联定位 ids 访问器 → 模板列表原地替换为累加全集 → 重放并清缓存 ──
+        // ── 11. 重放：原子认领 → 样本关联定位 ids 访问器 → 模板列表原地替换为累加全集 → 重放并清缓存 ──
         final int[] replayed = new int[1];
         final Object[] repArgs = new Object[3];
         final boolean[] fail = new boolean[1];
@@ -405,8 +417,9 @@ public class HookMigrationBehaviorTest {
                         && ((FakeMPkt) repArgs[1]).idsList().containsAll(Arrays.asList("m1", "m2", "m3"))
                         && ((FakeMPkt) repArgs[1]).foldList().equals(Arrays.asList("foldX")),
                 "重放：样本关联定位 ids 访问器(区分双 List) 且原地替换为累加全集、fold 不动");
-        check(AntiRecall.KN_CTX.get("123456789") == null && AntiRecall.KN_IDS.get("123456789") == null,
-                "重放：成功后该会话 ctx/ids 已清");
+        check(AntiRecall.KN_STATE.get("123456789") == null
+                        && AntiRecall.PENDING_READ.get("123456789") == null,
+                "重放：成功后该会话重放缓存与兜底暂存已清");
         check(c9.proceedCount == 1, "重放：回复构造器仍执行一次");
         check(!Boolean.TRUE.equals(AntiRecall.KN_REPLAY.get()), "重放：卫兵已复位");
         // 载体兜底幂等：重放后窗口内载体再到来 -> merged 只剩载体自身 ids，不重复
@@ -418,49 +431,50 @@ public class HookMigrationBehaviorTest {
         check(((List<?>) a9b[0]).equals(Arrays.asList("c")),
                 "重放后载体兜底：缓存已清，仅放行载体自身 ids（幂等）");
 
-        // ── 12. 重放失败：缓存保留，可重试 ──
+        // ── 12. 重放失败：失败批次恢复回待重放集，可重试 ──
         fail[0] = true;
-        AntiRecall.READ_WINDOW = 0;   // §11 重开了窗口, 落账需要浏览分支
-        knCap.intercept(new FakeChain(readReqCtor, implObj, new Object[]{ new FakeMPkt("x"), cbObj }, null));
+        AntiRecall.READ_WINDOWS.clear();   // §11 重开了窗口, 落账需要浏览分支
+        FakeMPkt xPkt = new FakeMPkt("x");
+        AntiRecall.CURRENT_KN.set(new Object[]{ implObj, xPkt, cbObj });
         readHook.intercept(new FakeChain(readReqCtor, null,
-                new Object[]{ new FakeMPkt("x").idsList(), new FakeChannel(), Long.valueOf(11), null, null, null, null, folds }, null));
+                new Object[]{ xPkt.idsList(), new FakeChannel(), Long.valueOf(11), null, null, null, null, folds }, null));
         FakeChain c10 = new FakeChain(readReqCtor, null, new Object[]{ "123456789" }, null);
         sendHook.intercept(c10);
-        check(replayed[0] == 2 && AntiRecall.KN_CTX.get("123456789") != null
-                        && AntiRecall.KN_IDS.get("123456789") != null,
-                "重放失败：异常被吞且缓存保留（走载体兜底/下次回复重试）");
+        AntiRecall.KnState st12 = AntiRecall.KN_STATE.get("123456789");
+        check(replayed[0] == 2 && st12 != null && st12.pendingIds.contains("x"),
+                "重放失败：异常被吞且失败批次恢复回待重放集（走载体兜底/下次回复重试）");
         fail[0] = false;
         sendHook.intercept(c10);
-        check(replayed[0] == 3 && AntiRecall.KN_CTX.get("123456789") == null,
+        check(replayed[0] == 3 && AntiRecall.KN_STATE.get("123456789") == null,
                 "重放重试：下次回复成功后清缓存");
 
         // ── 13. 会话隔离：回 B 不重放 A ──
-        AntiRecall.READ_WINDOW = 0;
+        AntiRecall.READ_WINDOWS.clear();
         FakeMPkt aPkt = new FakeMPkt("aOnly");
         Object implA = new FakeImpl();
-        knCap.intercept(new FakeChain(readReqCtor, implA, new Object[]{ aPkt, cbObj }, null));
+        AntiRecall.CURRENT_KN.set(new Object[]{ implA, aPkt, cbObj });
         readHook.intercept(new FakeChain(readReqCtor, null,
                 new Object[]{ aPkt.idsList(), new FakeChannel(), Long.valueOf(12), null, null, null, null, folds }, null));
         FakeChain c11 = new FakeChain(readReqCtor, null, new Object[]{ "22222222" }, null);
         sendHook.intercept(c11);
-        check(replayed[0] == 3 && AntiRecall.KN_CTX.get("123456789") != null
-                        && AntiRecall.KN_CTX.get("123456789")[1] == aPkt,
+        AntiRecall.KnState st13 = AntiRecall.KN_STATE.get("123456789");
+        check(replayed[0] == 3 && st13 != null && st13.m == aPkt,
                 "会话隔离：回复 B(22222222) 不触发 A(123456789) 的重放，A 缓存原样");
 
         // ── 14. 开关关 / 通道未就绪：完全不触发 ──
         Config.antiread = false;
         sendHook.intercept(c11);
-        check(replayed[0] == 3 && AntiRecall.KN_CTX.get("123456789") != null,
+        check(replayed[0] == 3 && AntiRecall.KN_STATE.get("123456789") != null,
                 "开关关：不重放且缓存不动");
         AntiRecall.KN_READY = false;
         Config.antiread = true;
         sendHook.intercept(c11);
-        check(replayed[0] == 3 && AntiRecall.KN_CTX.get("123456789") != null,
+        check(replayed[0] == 3 && AntiRecall.KN_STATE.get("123456789") != null,
                 "通道未就绪(KN_READY=false)：不重放（纯载体模式）");
         AntiRecall.KN_READY = true;
 
         // ── 15. KN_REPLAY 卫兵：重放期间浏览抑制、Kn 截获、落账全部直通 ──
-        AntiRecall.READ_WINDOW = 0;   // 强制浏览分支（若无卫兵会清空 ids）
+        AntiRecall.READ_WINDOWS.clear();   // 强制浏览分支（若无卫兵会清空 ids）
         AntiRecall.PENDING_READ.remove("123456789");
         AntiRecall.KN_REPLAY.set(Boolean.TRUE);
         java.util.List<String> selfIds = new ArrayList<String>(Arrays.asList("self1"));
@@ -473,14 +487,9 @@ public class HookMigrationBehaviorTest {
                 "卫兵直通：重放期间读请求 hook 不做任何改参/暂存");
         FakeMPkt replayPkt = new FakeMPkt("rp1");
         knCap.intercept(new FakeChain(readReqCtor, implA, new Object[]{ replayPkt, cbObj }, null));
-        readHook.intercept(new FakeChain(readReqCtor, null,
-                new Object[]{ replayPkt.idsList(), new FakeChannel(), Long.valueOf(13), null, null, null, null, folds }, null));
-        check(AntiRecall.KN_IDS.get("123456789").contains("aOnly")
-                        && !AntiRecall.KN_IDS.get("123456789").contains("rp1")
-                        && AntiRecall.CURRENT_KN.get() == null,
-                "卫兵直通：重放期间 Kn 截获与落账全部不生效");
+        check(AntiRecall.CURRENT_KN.get() == null,
+                "卫兵直通：重放期间 Kn 截获不落线程槽");
         AntiRecall.KN_REPLAY.set(Boolean.FALSE);
-        AntiRecall.CURRENT_KN.remove();
         readHook.intercept(c13);
         Object[] a13b = argsOf(c13);
         check(((List<?>) a13b[0]).isEmpty()
@@ -488,14 +497,135 @@ public class HookMigrationBehaviorTest {
                 "卫兵复位后：同一请求恢复浏览抑制语义（清空+暂存）");
         AntiRecall.KN_READY = false;
 
+        // ── 16. 审计 P1 回归：回复窗口按会话隔离 —— 回复 B 不放行 A 的浏览请求/不消费 A 的暂存 ──
+        AntiRecall.READ_WINDOWS.clear();
+        AntiRecall.PENDING_READ.clear();
+        AntiRecall.KN_STATE.clear();
+        Config.antiread = true;
+        AntiRecall.KN_READY = true;
+        // A 会话浏览(窗口关) → 暂存
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ new ArrayList<String>(Arrays.asList("a1")), new FakeChannel(), Long.valueOf(20), null, null, null, null, folds }, null));
+        check(AntiRecall.PENDING_READ.get("123456789") != null
+                        && AntiRecall.PENDING_READ.get("123456789").contains("a1"),
+                "P1前置：A 浏览已暂存");
+        // 回复 B → 只开 B 的窗口
+        sendHook.intercept(new FakeChain(readReqCtor, null, new Object[]{ "22222222" }, null));
+        check(AntiRecall.READ_WINDOWS.containsKey("22222222")
+                        && !AntiRecall.READ_WINDOWS.containsKey("123456789"),
+                "P1：回复 B 只开 B 的窗口");
+        // B 的窗口期内浏览 A → 不放行(照常清空+暂存), A 的暂存(旧+新)不被消费
+        FakeChain cA = new FakeChain(readReqCtor, null,
+                new Object[]{ new ArrayList<String>(Arrays.asList("a2")), new FakeChannel(), Long.valueOf(21), null, null, null, null, folds }, null);
+        readHook.intercept(cA);
+        Object[] aA = argsOf(cA);
+        check(((List<?>) aA[0]).isEmpty()
+                        && AntiRecall.PENDING_READ.get("123456789").containsAll(Arrays.asList("a1", "a2")),
+                "P1：B 的窗口不放行 A 的浏览请求, A 的暂存(旧+新)原样保留");
+        // 回复 A → 开 A 的窗口 → A 的载体请求放行并消费全部暂存
+        sendHook.intercept(new FakeChain(readReqCtor, null, new Object[]{ "123456789" }, null));
+        FakeChain cA2 = new FakeChain(readReqCtor, null,
+                new Object[]{ new ArrayList<String>(Arrays.asList("a3")), new FakeChannel(), Long.valueOf(22), null, null, null, null, folds }, null);
+        readHook.intercept(cA2);
+        Object[] aA2 = argsOf(cA2);
+        check(((List<?>) aA2[0]).containsAll(Arrays.asList("a1", "a2", "a3"))
+                        && AntiRecall.PENDING_READ.get("123456789") == null,
+                "P1：回复 A 后窗口内 A 的载体请求放行并消费全部暂存");
+
+        // ── 17. 审计 P2-6 回归：调度失败必须归还被认领的缓存(含其间的新批次) ──
+        AntiRecall.READ_WINDOWS.clear();
+        AntiRecall.KN_STATE.clear();
+        AntiRecall.PENDING_READ.clear();
+        AntiRecall.knAccResolved = false;
+        AntiRecall.knAccIds = null;
+        final java.util.List<Runnable> deferred = new ArrayList<Runnable>();
+        AntiRecall.sScheduler = new AntiRecall.ReplayScheduler() {
+            public void schedule(Runnable r) { deferred.add(r); }   // 延迟执行
+        };
+        AntiRecall.CURRENT_KN.set(new Object[]{ implObj, new FakeMPkt("s-old"), cbObj });
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ new FakeMPkt("s-old").idsList(), new FakeChannel(), Long.valueOf(30), null, null, null, null, folds }, null));
+        sendHook.intercept(new FakeChain(readReqCtor, null, new Object[]{ "123456789" }, null));
+        check(AntiRecall.KN_STATE.get("123456789") == null && deferred.size() == 1,
+                "P2-6：回复原子认领, 任务进入调度队列");
+        AntiRecall.sScheduler = new AntiRecall.ReplayScheduler() {
+            public void schedule(Runnable r) { throw new RuntimeException("scheduler down"); }
+        };
+        AntiRecall.READ_WINDOWS.clear();   // 封闭: reply1 开的窗口不拦截本步浏览落账
+        AntiRecall.CURRENT_KN.set(new Object[]{ implObj, new FakeMPkt("s-new"), cbObj });
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ new FakeMPkt("s-new").idsList(), new FakeChannel(), Long.valueOf(31), null, null, null, null, folds }, null));
+        sendHook.intercept(new FakeChain(readReqCtor, null, new Object[]{ "123456789" }, null));
+        AntiRecall.KnState st17 = AntiRecall.KN_STATE.get("123456789");
+        check(st17 != null && st17.pendingIds.contains("s-new")
+                        && AntiRecall.PENDING_READ.get("123456789") != null,
+                "P2-6：调度失败后失败批次(s-new)已恢复(s-old 在延迟任务中在途, 不属失败恢复)");
+        // 恢复正常调度: 跑延迟任务(s-old 批) + 再回复(s-new 批) → 全部重放
+        AntiRecall.sScheduler = new AntiRecall.ReplayScheduler() {
+            public void schedule(Runnable r) { r.run(); }
+        };
+        for (Runnable r : deferred) r.run();
+        sendHook.intercept(new FakeChain(readReqCtor, null, new Object[]{ "123456789" }, null));
+        check(replayed[0] == 5 && AntiRecall.KN_STATE.get("123456789") == null,
+                "P2-6：恢复调度后延迟批次与新批次全部重放完成");
+
+        // ── 18. 审计 P2-2 回归：失败批次并入更新截获的待重放集(不丢弃) ──
+        AntiRecall.READ_WINDOWS.clear();
+        AntiRecall.KN_STATE.clear();
+        AntiRecall.PENDING_READ.clear();
+        AntiRecall.sScheduler = new AntiRecall.ReplayScheduler() {
+            public void schedule(Runnable r) { deferred.add(r); }   // 延迟执行, 便于控制失败时机
+        };
+        AntiRecall.CURRENT_KN.set(new Object[]{ implObj, new FakeMPkt("old-1", "old-2"), cbObj });
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ new FakeMPkt("old-1", "old-2").idsList(), new FakeChannel(), Long.valueOf(40), null, null, null, null, folds }, null));
+        sendHook.intercept(new FakeChain(readReqCtor, null, new Object[]{ "123456789" }, null));   // 认领→延迟
+        AntiRecall.READ_WINDOWS.clear();   // 封闭: 上一次回复开的窗口不拦截本步浏览落账
+        AntiRecall.CURRENT_KN.set(new Object[]{ implObj, new FakeMPkt("new-1"), cbObj });
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ new FakeMPkt("new-1").idsList(), new FakeChannel(), Long.valueOf(41), null, null, null, null, folds }, null));   // 其间新截获
+        fail[0] = true;
+        deferred.remove(deferred.size() - 1).run();   // 旧批次任务失败 → 恢复必须并入新状态的待重放集
+        fail[0] = false;
+        AntiRecall.KnState st18 = AntiRecall.KN_STATE.get("123456789");
+        check(st18 != null && st18.pendingIds.containsAll(Arrays.asList("new-1", "old-1", "old-2")),
+                "P2-2：失败批次(old-1/old-2)并入更新截获(new-1)的待重放集, 无一丢失");
+        AntiRecall.sScheduler = new AntiRecall.ReplayScheduler() {
+            public void schedule(Runnable r) { r.run(); }   // 恢复同步执行后再验证最终回复
+        };
+        sendHook.intercept(new FakeChain(readReqCtor, null, new Object[]{ "123456789" }, null));
+        check(replayed[0] == 7 && ((FakeMPkt) repArgs[1]).idsList().containsAll(Arrays.asList("new-1", "old-1", "old-2")),
+                "P2-2：下次回复一次性重放新旧全部批次");
+
+        // ── 19. 审计 P2-4 回归：降级重放(列表不可变)保留未补齐部分 ──
+        AntiRecall.READ_WINDOWS.clear();
+        AntiRecall.KN_STATE.clear();
+        AntiRecall.PENDING_READ.clear();
+        AntiRecall.sScheduler = new AntiRecall.ReplayScheduler() {
+            public void schedule(Runnable r) { r.run(); }   // 同步执行
+        };
+        FakeMPkt dPkt = new FakeMPkt(true, "d-first");   // idsList() 不可变 → 模板替换必然失败
+        AntiRecall.CURRENT_KN.set(new Object[]{ implObj, dPkt, cbObj });
+        readHook.intercept(new FakeChain(readReqCtor, null,
+                new Object[]{ dPkt.idsList(), new FakeChannel(), Long.valueOf(50), null, null, null, null, folds }, null));
+        sendHook.intercept(new FakeChain(readReqCtor, null, new Object[]{ "123456789" }, null));   // 重放"成功"但为降级
+        AntiRecall.KnState st19 = AntiRecall.KN_STATE.get("123456789");
+        check(st19 != null && st19.pendingIds.contains("d-first")
+                        && AntiRecall.PENDING_READ.get("123456789").contains("d-first"),
+                "P2-4：降级重放未补齐的部分保留给兜底/下次重试(不随缓存清空而丢失)");
+        // 下一轮重试(列表已不可变, 仍降级) → 未补齐部分继续保留
+        sendHook.intercept(new FakeChain(readReqCtor, null, new Object[]{ "123456789" }, null));
+        check(AntiRecall.KN_STATE.get("123456789") != null
+                        && AntiRecall.KN_STATE.get("123456789").pendingIds.contains("d-first"),
+                "P2-4：持续降级下未补齐部分持续保留(不消失)");
+
         // ── 收尾：还原全局状态，避免影响同 JVM 其它用例 ──
         Config.antiread = false;
-        AntiRecall.READ_WINDOW = 0;
+        AntiRecall.READ_WINDOWS.clear();
         AntiRecall.CACHE.clear();
         AntiRecall.PENDING_READ.clear();
-        AntiRecall.KN_CTX.clear();
-        AntiRecall.KN_IDS.clear();
-        AntiRecall.knAccTried = false;
+        AntiRecall.KN_STATE.clear();
+        AntiRecall.knAccResolved = false;
         AntiRecall.knAccIds = null;
         AntiRecall.knMethod = null;
         AntiRecall.knLearnPending = false;
