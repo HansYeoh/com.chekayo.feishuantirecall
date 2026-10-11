@@ -817,8 +817,6 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
             KN_SLOT_BACKUP.remove();
         }
     }
-    static final ThreadLocal<Object[]> KN_SLOT_BACKUP = new ThreadLocal<Object[]>();
-
     /** 认领并后台重放指定会话的累加缓存(发送回复与表情回复两个触发源共用);
         内含全部门控: 通道就绪/重放方法已定夺/卫兵/开关。 */
     static void tryClaimAndReplay(String ch) {
@@ -981,6 +979,17 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
         return sb.toString();
     }
 
+    /** 从回复请求参数定位会话 id: 优先 PB Channel 参数(toString 含 id=), 退而求其次裸数字串。 */
+    static String replyChannelId(Object[] ra) {
+        if (ra != null) {
+            for (Object o : ra)
+                if (o != null && "com.bytedance.lark.pb.basic.v1.Channel".equals(o.getClass().getName())) {
+                    String c = channelId(o); if (!"?".equals(c)) return c;
+                }
+            for (Object o : ra) if (o instanceof String && ((String) o).matches("\\d{8,}")) return (String) o;
+        }
+        return "?";
+    }
     static final java.util.regex.Pattern CH_ID = java.util.regex.Pattern.compile("id=(\\d{6,})");
     static String channelId(Object ch) {
         if (ch == null) return "?";
@@ -999,6 +1008,7 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
         return "?";
     }
     static volatile boolean ANTIREAD2_INSTALLED = false;
+    static final java.util.concurrent.atomic.AtomicInteger READ_LOG_COUNT = new java.util.concurrent.atomic.AtomicInteger(0);
 
     static void installAntiRead2(ClassLoader cl) {
         if (ANTIREAD2_INSTALLED) return;
@@ -1046,8 +1056,9 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
                 if (a == null || a.length < 8) return;
                 String ch = channelId(a.length > 1 ? a[1] : null);
                 // 审计 P1 修复: 窗口按会话记录 —— 回复 B 开的窗口不再放行 A 的浏览请求
-                boolean inSendWindow = System.currentTimeMillis()
-                        < READ_WINDOWS.getOrDefault(ch, Long.valueOf(0L)).longValue();
+                Long windowEnd = READ_WINDOWS.get(ch);
+                boolean inSendWindow = windowEnd != null
+                        && System.currentTimeMillis() < windowEnd.longValue();
                 int midsBefore = (a[0] instanceof java.util.List) ? ((java.util.List) a[0]).size() : -1;
 
                 if (Config.antiread && TAMPER != 2) {
