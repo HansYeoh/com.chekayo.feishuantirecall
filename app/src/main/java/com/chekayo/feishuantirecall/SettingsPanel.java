@@ -28,11 +28,13 @@ final class SettingsPanel {
         Config.loadAndAnnounce();
         final boolean tampered = readTampered();
         final LinearLayout root = buildRoot(ctx, /*standalone=*/false, tampered);
-        new AlertDialog.Builder(ctx)
+        root.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        AlertDialog dialog = new AlertDialog.Builder(ctx)
                 .setTitle("模块设置")
                 .setView(root)
                 .setPositiveButton("完成", null)
                 .show();
+        Ui.styleDialog(dialog);
         // 首次打开：仅静默查更新；赞赏改为工具页手动入口，不自动弹窗
         if (!DataViews.updateCheckedThisSession) {
             DataViews.updateCheckedThisSession = true;
@@ -66,7 +68,8 @@ final class SettingsPanel {
         final boolean[] built = new boolean[3];
         LinearLayout bar = new LinearLayout(ctx);
         bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setBackgroundColor(Ui.cardBg(ctx));
+        bar.setBackground(Ui.glass(ctx, 24, true));
+        bar.setElevation(Ui.dp(ctx, 5));
         bar.setPadding(0, Ui.dp(ctx, 2), 0, Ui.dp(ctx, 2));
 
         for (int i = 0; i < 3; i++) {
@@ -85,7 +88,9 @@ final class SettingsPanel {
             });
         }
         // 把 bar 放在 root 末尾（weight 内容之上）
-        root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams barParams = new LinearLayout.LayoutParams(-1, -2);
+        barParams.setMargins(Ui.dp(ctx, 12), Ui.dp(ctx, 8), Ui.dp(ctx, 12), Ui.dp(ctx, 12));
+        root.addView(bar, barParams);
 
         switchTab(ctx, page, 0, standalone, tampered, tabs);
         return root;
@@ -105,6 +110,7 @@ final class SettingsPanel {
         sv.addView(box);
         page.addView(sv, new LinearLayout.LayoutParams(-1, -1));
         for (int j = 0; j < tabs.length; j++) {
+            tabs[j].setBackground(j == index ? Ui.glass(ctx, 20, true) : null);
             tabs[j].setTextColor(j == index ? Ui.ACCENT : Ui.subColor(ctx));
             tabs[j].setTypeface(null, j == index
                     ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
@@ -162,6 +168,27 @@ final class SettingsPanel {
                 "隐藏会话里 AI 总结的「消息速览」浮层（整条含边框）。",
                 Config.blockaipeek, new Ui.OnToggle() {
             @Override public void on(boolean b) { Config.set("blockaipeek", b); }
+        }));
+        c1.addView(Ui.dividerRow(ctx));
+        c1.addView(Ui.switchRow(ctx, "屏蔽相关知识",
+                "隐藏飞书 AI 在消息下方推荐的「相关知识」卡片",
+                Config.blockrelatedknowledge, new Ui.OnToggle() {
+            @Override public void on(boolean b) { Config.set("blockrelatedknowledge", b); }
+        }));
+        c1.addView(Ui.dividerRow(ctx));
+        c1.addView(Ui.switchRow(ctx, "消息时间常驻", "始终显示每条消息下方的发送时间，按手机时区显示",
+                Config.messageTimeAlways, new Ui.OnToggle() {
+            @Override public void on(boolean b) { Config.set("messageTimeAlways", b); }
+        }));
+        c1.addView(Ui.dividerRow(ctx));
+        c1.addView(Ui.switchRow(ctx, "时间格式化", "独立于常驻开关，点击显示时间时也使用自定义格式",
+                Config.messageTimeFormatting, new Ui.OnToggle() {
+            @Override public void on(boolean b) { Config.set("messageTimeFormatting", b); }
+        }));
+        c1.addView(Ui.dividerRow(ctx));
+        c1.addView(Ui.navRow(ctx, "消息时间格式", Config.messageTimePattern, Ui.ACCENT,
+                new View.OnClickListener() {
+            @Override public void onClick(View v) { showMessageTimeFormat(ctx); }
         }));
         c1.addView(Ui.dividerRow(ctx));
         c1.addView(Ui.switchRow(ctx, "移除聊天水印", "去掉外部联系人聊天里的平铺水印，改后重进聊天生效",
@@ -273,6 +300,54 @@ final class SettingsPanel {
                 + (standalone ? "  ·  模块桌面入口" : "")));
     }
 
+    private static void showMessageTimeFormat(final Context ctx) {
+        final android.widget.EditText input = new android.widget.EditText(ctx);
+        input.setSingleLine(true); input.setText(Config.messageTimePattern);
+        int pad = Ui.dp(ctx, 16); input.setPadding(pad, pad, pad, pad);
+        final TextView preview = new TextView(ctx);
+        preview.setTextColor(Ui.subColor(ctx)); preview.setPadding(pad, 0, pad, pad);
+        final Runnable update = new Runnable() {
+            @Override public void run() {
+                String pattern = input.getText().toString();
+                preview.setText(MessageTimeFormat.valid(pattern)
+                        ? "预览：" + MessageTimeFormat.format(System.currentTimeMillis() / 1000, pattern)
+                            + "\n相对日期：{relative} HH:mm:ss（今天、昨天、前天、周一、上周一）\n常用：HH:mm:ss / MM-dd HH:mm / yyyy-MM-dd HH:mm:ss"
+                        : "格式无效，请检查字母或引号。示例：yyyy-MM-dd HH:mm:ss");
+            }
+        };
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { update.run(); }
+            @Override public void afterTextChanged(android.text.Editable e) {}
+        });
+        LinearLayout box = new LinearLayout(ctx); box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(input); box.addView(preview);
+        box.addView(Ui.navRow(ctx, "选择常用格式", "相对日期、完整日期、仅时间", Ui.ACCENT, new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                final String[] patterns = { "{relative} HH:mm:ss", "{relative} HH:mm", "yyyy-MM-dd HH:mm:ss", "MM-dd HH:mm", "HH:mm:ss" };
+                new AlertDialog.Builder(ctx).setTitle("常用时间格式")
+                        .setItems(patterns, new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface d, int which) { input.setText(patterns[which]); }
+                }).show();
+            }
+        }));
+        update.run();
+        final AlertDialog dialog = new AlertDialog.Builder(ctx).setTitle("消息时间格式")
+                .setView(box).setPositiveButton("保存", null).setNegativeButton("取消", null)
+                .setNeutralButton("恢复默认", null).show();
+        Ui.styleDialog(dialog);
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                String pattern = input.getText().toString().trim();
+                if (!MessageTimeFormat.valid(pattern)) { input.setError("时间格式无效"); return; }
+                Config.setStr("messageTimePattern", pattern); dialog.dismiss();
+            }
+        });
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { input.setText(MessageTimeFormat.DEFAULT); }
+        });
+    }
+
     // ── 记录页 ──────────────────────────────────────────────────────
     private static void buildRecords(final Context ctx, LinearLayout box, boolean standalone) {
         // 向飞书请求推送档案/离职名单副本（飞书在运行时约 1s 内到位；本页再次打开可见）
@@ -293,6 +368,11 @@ final class SettingsPanel {
         c1.addView(Ui.navRow(ctx, "退群 / 移除记录", "开启退群提醒后的事件日志", Ui.ACCENT,
                 new View.OnClickListener() {
             @Override public void onClick(View v) { DataViews.showLeaveLog(ctx); }
+        }));
+        c1.addView(Ui.dividerRow(ctx));
+        c1.addView(Ui.navRow(ctx, "屏蔽日志", "最近 200 条 · 消息速览 / 相关知识", Ui.ACCENT,
+                new View.OnClickListener() {
+            @Override public void onClick(View v) { BlockLog.show(ctx); }
         }));
         box.addView(c1);
 
@@ -399,6 +479,11 @@ final class SettingsPanel {
                     ctx.startActivity(i);
                 } catch (Throwable ignored) { }
             }
+        }));
+        c2.addView(Ui.dividerRow(ctx));
+        c2.addView(Ui.navRow(ctx, "版本与配置同步", "查看已安装版本、飞书加载版本及同步状态", Ui.ACCENT,
+                new View.OnClickListener() {
+            @Override public void onClick(View v) { RuntimeStatus.show(ctx); }
         }));
         c2.addView(Ui.dividerRow(ctx));
         c2.addView(Ui.navRow(ctx, "检查更新", "当前 v" + DataViews.moduleVersion(), Ui.ACCENT,
@@ -617,7 +702,7 @@ final class SettingsPanel {
     private static View buildHeader(Context ctx, boolean standalone) {
         LinearLayout wrap = new LinearLayout(ctx);
         wrap.setOrientation(LinearLayout.VERTICAL);
-        wrap.setBackgroundColor(Ui.cardBg(ctx));
+        wrap.setBackgroundColor(Color.TRANSPARENT);
 
         LinearLayout h = new LinearLayout(ctx);
         h.setOrientation(LinearLayout.HORIZONTAL);
