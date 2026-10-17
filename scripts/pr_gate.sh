@@ -12,8 +12,8 @@
 #      (构建脚本在签名机本地跑, 被篡改可窃取私钥)
 #   G5 新增网络/执行/动态加载代码: 按「新增-删除」计数, 净新增才拦(纯搬移代码不误报)
 #   G6 新增 URL 必须在白名单内(镜像/自家仓库/t.me/文档); .md 文档豁免 URL 检查
-#   G7 版本一致性: AndroidManifest / AntiRecall / version.json 三处 versionCode+versionName
-#      必须一致, 且 versionCode > 当前最新 Release
+#   G7 版本一致性: Manifest / AntiRecall / 对应发布线 JSON（modern 另含 module.prop）
+#      必须一致, 且 versionCode > 同发布线全部非 draft Release（包含 prerelease）
 set -u
 REPO="haikow/com.chekayo.feishuantirecall"
 PR="${1:?用法: $0 <PR编号> [--no-comment]}"
@@ -23,12 +23,14 @@ gh_retry() { for i in 1 2 3 4 5 6; do out=$(gh api "$@" 2>/dev/null) && { echo "
 gh_run() { for i in 1 2 3 4 5 6; do out=$(gh "$@" 2>/dev/null) && { echo "$out"; return 0; }; sleep $((i*2)); done; return 1; }
 
 # ── 取 PR 元数据 / diff / 文件清单 ──────────────────────────────
-META=$(gh_run pr view "$PR" -R "$REPO" --json headRefOid,additions,deletions,changedFiles,author \
-       --jq '[.headRefOid,.additions,.deletions,.changedFiles,.author.login]|@tsv') || { echo "取 PR 元数据失败"; exit 2; }
+META=$(gh_run pr view "$PR" -R "$REPO" --json headRefOid,additions,deletions,changedFiles,author,baseRefName \
+       --jq '[.headRefOid,.additions,.deletions,.changedFiles,.author.login,.baseRefName]|@tsv') || { echo "取 PR 元数据失败"; exit 2; }
 HEAD_SHA=$(echo "$META" | cut -f1); ADD=$(echo "$META" | cut -f2); DEL=$(echo "$META" | cut -f3)
 NFILES=$(echo "$META" | cut -f4); AUTHOR=$(echo "$META" | cut -f5)
+BASE_BRANCH=$(echo "$META" | cut -f6)
 DIFF=$(gh_run pr diff "$PR" -R "$REPO") || { echo "取 diff 失败"; exit 2; }
-FILES_JSON=$(gh_retry "repos/$REPO/pulls/$PR/files?per_page=100") || { echo "取文件清单失败"; exit 2; }
+FILES_JSON=$(gh_retry --paginate --slurp "repos/$REPO/pulls/$PR/files?per_page=100" \
+  --jq '[.[][]]') || { echo "取文件清单失败"; exit 2; }
 
 FAIL=0; REPORT="## 🤖 自动审查 · PR #$PR
 
@@ -66,7 +68,7 @@ bad=[f['filename'] for f in json.load(sys.stdin)
 print('\n'.join(bad))" 2>/dev/null)
 BUILDSL=$(echo "$FILES_JSON" | python -c "
 import sys,json
-pat=('build.ps1','build.sh','scripts/make_release.sh','scripts/tg_release.sh','scripts/pr_gate.sh','.github/workflows/')
+pat=('build.ps1','build.sh','scripts/make_release.sh','scripts/tg_release.sh','scripts/pr_gate.sh','scripts/check_pr_versions.py','.github/workflows/')
 bad=[f['filename'] for f in json.load(sys.stdin) if f['filename'].startswith(pat)]
 print('\n'.join(bad))" 2>/dev/null)
 [ -n "$KEYFILES" ] && note_fail "G2 新增密钥/证书文件" "\`\`\`$(echo $KEYFILES)\`\`\`" || note_ok "G2 无密钥/证书文件"
@@ -83,8 +85,8 @@ NET_ADD=$(echo "$added_code"   | grep -cE "$DANGER_PAT")
 NET_DEL=$(echo "$removed_code" | grep -cE "$DANGER_PAT")
 if [ "$NET_ADD" -gt "$NET_DEL" ]; then
   note_fail "G5 净新增网络/执行/动态加载代码" "新增 $NET_ADD 处 / 删除 $NET_DEL 处危险 API 调用, 需人工确认用途:"
-  echo "$added_code" | grep -E "$DANGER_PAT" | head -10 | while read -r l; do REPORT="$REPORT> \`$(echo "$l" | cut -c1-120)\`
-"; done
+  while read -r l; do REPORT="$REPORT> \`$(echo "$l" | cut -c1-120)\`
+"; done <<< "$(echo "$added_code" | grep -E "$DANGER_PAT" | head -10)"
 else
   note_ok "G5 无净新增网络/执行代码(搬移 $NET_ADD 处不计)"
 fi
@@ -102,21 +104,15 @@ else
 fi
 
 # ── G7 版本一致性 ────────────────────────────────────────────────
-ALL_VC=$(echo "$DIFF" | grep -E '^\+' | grep -oE 'versionCode="[0-9]+"|MODULE_VERSION_CODE = [0-9]+|"versionCode": [0-9]+' | grep -oE '[0-9]+')
-ALL_VN=$(echo "$DIFF" | grep -E '^\+' | grep -oE 'versionName="[0-9.]+"|MODULE_VERSION = "[0-9.]+"|"versionName": "[0-9.]+"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-VC_N=$(echo "$ALL_VC" | grep -c .); VN_N=$(echo "$ALL_VN" | grep -c .)
-VC_U=$(echo "$ALL_VC" | sort -u | tr '\n' ' '); VN_U=$(echo "$ALL_VN" | sort -u | tr '\n' ' ')
-VC_UW=$(echo $VC_U | wc -w); VN_UW=$(echo $VN_U | wc -w)
-CUR_TAG=$(gh_run release view -R "$REPO" --json tagName --jq '.tagName')
-CUR_VC=$(echo "${CUR_TAG%%-*}" | grep -oE '^[0-9]+$' || echo 0)
-PR_VC=$(echo $VC_U | awk '{print $1}')
-if [ "$VC_N" -ge 3 ] && [ "$VC_UW" -eq 1 ] && [ "$VN_N" -ge 3 ] && [ "$VN_UW" -eq 1 ] && [ "$PR_VC" -gt "$CUR_VC" ] 2>/dev/null; then
-  note_ok "G7 版本一致且递增: v$VN_U(versionCode $VC_U) > 当前 release vc$CUR_VC"
+# Version validation reads patch text as data; it never imports code from the PR.
+RELEASE_TAGS=$(gh_retry --paginate --slurp "repos/$REPO/releases?per_page=100" \
+  --jq '[.[][] | select(.draft == false) | .tag_name]') || { echo "取发布版本失败"; exit 2; }
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if VERSION_RESULT=$(printf '%s\n' "$FILES_JSON" | python "$SCRIPT_DIR/check_pr_versions.py" \
+    --base-branch "$BASE_BRANCH" --release-tags "$RELEASE_TAGS" 2>&1); then
+  note_ok "G7 版本一致且递增: $VERSION_RESULT"
 else
-  note_fail "G7 版本一致性不满足" "- 新 versionCode: 共 $VC_N 处 / 唯一值 [$VC_U](需 ≥3 处且一致: Manifest/AntiRecall/version.json)
-- 新 versionName: 共 $VN_N 处 / 唯一值 [$VN_U]
-- 当前最新 Release versionCode: $CUR_VC, PR 必须 > 它
-若 PR 未带版本号, 请作者补齐后再请求审查。"
+  note_fail "G7 版本一致性不满足" "$VERSION_RESULT"
 fi
 
 # ── 汇总 ────────────────────────────────────────────────────────

@@ -16,7 +16,7 @@ import io.github.libxposed.api.XposedInterface;
  *
  * 1) 原生 SQL 层 (libsqlcipher.so, libantirecall.so inline hook sqlite3_step):
  *    撤回 = REPLACE INTO `messages` 且 is_recalled=1 + content 清空。该写入即将执行时把
- *    id+chat_id 改绑成哨兵(1,1), 真正的原始行(收信时已入库)原封不动 -> 未打开聊天也能救。
+ *    自己的消息正常落库；他人的原文保留，撤回状态单独持久化，不再生成额外提示消息。
  *    仅在【主进程】装载 (其它进程/沙箱进程加载/重定位会崩, 且没有消息库)。
  *    安装动作由 Java 线程轮询 native tryInstall() 完成 (避免 raw pthread 上 PLT 惰性解析崩溃)。
  *
@@ -52,8 +52,8 @@ public class AntiRecall {
         g_lark_mark = 0;
         return false;
     }
-    static final String MODULE_VERSION = "1.8.10-api102";
-    static final int MODULE_VERSION_CODE = 1032;   // 与 AndroidManifest versionCode 同步; 更新检查比对用
+    static final String MODULE_VERSION = "1.8.11-api102";
+    static final int MODULE_VERSION_CODE = 1033;   // 与 AndroidManifest versionCode 同步; 更新检查比对用
     static final String MAPPER = "ax2.b";
 
     // 签名自校验: 运行 APK 的证书 SHA-256(=SHA256(signature.toByteArray()))。重打包必须重签名 -> 证书变 -> 检测到篡改。
@@ -62,7 +62,6 @@ public class AntiRecall {
     static volatile int TAMPER = 0;
     static final String STATUS = "com.ss.android.lark.chat.entity.message.Message$Status";
 
-    static final Map<String, Object> CACHE = new ConcurrentHashMap<String, Object>();
 
     static volatile String MODULE_PATH = null;
     static volatile boolean NATIVE_STARTED = false;
@@ -78,6 +77,10 @@ public class AntiRecall {
 
     /** JNI: FeishuKit 设置面板实时开关防撤回中和. */
     public static native void nativeSetRecall(boolean on);
+
+    /** JNI: 读取已提交的撤回标记快照，不从 UI 线程访问飞书数据库连接。 */
+    public static native boolean nativeIsRecallMarked(String uid, long chat, long id);
+    public static native void nativeBindRecallAccount(String uid, String storage);
 
     /** JNI: 诊断日志开关 (关=native flog 完全不写文件). */
     public static native void nativeSetDiag(boolean on);
@@ -104,9 +107,10 @@ public class AntiRecall {
         if (CONFIG_BRIDGE_INSTALLED) return;
         CONFIG_BRIDGE_INSTALLED = true;
         try {
-            Object app = Reflect.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+            Object app = Config.appContextForSync();
             if (app instanceof android.content.Context) {
                 bindConfigBridge((android.content.Context) app);
+                RecallMessages.applicationReady = true;
                 return;
             }
         } catch (Throwable ignored) {}
@@ -120,6 +124,8 @@ public class AntiRecall {
                     try {
                         if (chain.getArgs().get(0) instanceof android.content.Context) {
                             bindConfigBridge((android.content.Context) chain.getArgs().get(0));
+                            RecallMessages.applicationReady = true;
+                            RecallMessages.refreshAccount();
                         }
                     } catch (Throwable ignored) {}
                     return result;
@@ -138,6 +144,7 @@ public class AntiRecall {
                     String act = i.getAction();
                     if (Config.ACTION_SYNC.equals(act)) {
                         Config.onSyncReceive(i.getStringExtra("json"));
+                        RecallBubbleUi.schedule();
                         try {
                             nativeSetRecall(Config.antirecall);
                             nativeSetKeepKicked(Config.keepkicked);
@@ -211,14 +218,10 @@ public class AntiRecall {
             if (PKG.equals(currentProcessName())) installDownloadMirror();
         } catch (Throwable t) { ModuleLog.log("[fucklark] download mirror init failed: " + t); }
 
-        // ---- 1) 原生 SQL 层: 仅主进程 ----
-        try {
-            if (PKG.equals(currentProcessName())) {
-                startNative();
-            }
-        } catch (Throwable t) {
-            ModuleLog.log("[antirecall] native start failed: " + t);
-        }
+        // ---- 1) Independent recall layers, main process only ----
+        if (PKG.equals(currentProcessName())) installRecall(classLoader, new RecallInitStep() {
+            public void run() throws Throwable { startNative(); }
+        });
 
         // ---- 1.5) 防对方已读 (v2, Java 层): hook UpdateMessagesMeReadRequest 构造, 清空 message_ids/fold_ids ----
         // 桌面版做法的忠实移植: 已读上报命令 UPDATE_MESSAGES_ME_READ 携带 message_ids, 清空即"标零条已读".
@@ -258,7 +261,7 @@ public class AntiRecall {
                 ModuleLog.log("[antirecall] hook " + MAPPER + ".a failed: " + t);
             }
         } else {
-            ModuleLog.log("[antirecall] 新版飞书: " + MAPPER + ".a(Object,int) 不存在, 仅走 native SQL 层 (new mode)");
+            ModuleLog.log("[antirecall] 新版飞书: 跳过旧映射器 " + MAPPER + "，使用 SQL 保留和 MessageInfo 兜底");
         }
     }
 
@@ -286,7 +289,7 @@ public class AntiRecall {
 
     static String feishuVersion() {
         try {
-            Object app = Reflect.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+            Object app = Config.appContextForSync();
             android.content.Context ctx = (android.content.Context) app;
             android.content.pm.PackageInfo pi = ctx.getPackageManager().getPackageInfo(PKG, 0);
             return pi.versionName + " (" + pi.versionCode + ")";
@@ -296,7 +299,7 @@ public class AntiRecall {
     /** 下载另存监听: 取 Application context 装 DownloadMirror; context 尚未就绪则 hook Instrumentation.callApplicationOnCreate 兜底。 */
     static void installDownloadMirror() {
         try {
-            Object app = Reflect.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+            Object app = Config.appContextForSync();
             if (app instanceof android.content.Context) {
                 DownloadMirror.install((android.content.Context) app);
                 return;
@@ -322,7 +325,7 @@ public class AntiRecall {
     static File larkFilesDir() {
         // 首选: App 真实 files 目录(getFilesDir), 任何包名/沙箱/工作资料/虚拟化都对; currentApplication 早期可能为 null -> 回退猜路径。
         try {
-            Object app = Reflect.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
+            Object app = Config.appContextForSync();
             if (app instanceof android.content.Context) {
                 File f = ((android.content.Context) app).getFilesDir();
                 if (f != null) return f;
@@ -385,7 +388,7 @@ public class AntiRecall {
                         if (src == null) return result;
                         String s = src.toString();
                         if (s == null || s.length() == 0) return result;
-                        if (!isRecallSystemText(s)) return result;
+                        if (!Config.antirecall || !isRecallSystemText(s) || isOwnRecallNotice(s)) return result;
 
                         android.widget.TextView tv = (android.widget.TextView) chain.getThisObject();
                         if (RECALL_UI_BUSY.contains(tv)) return result;
@@ -457,6 +460,13 @@ public class AntiRecall {
     }
 
     /** 聊天系统提示文案里识别撤回（收窄匹配，避免普通消息误伤）。 */
+    static boolean isOwnRecallNotice(String text) {
+        if (text == null) return false;
+        String s = text.trim().toLowerCase(java.util.Locale.US);
+        return s.startsWith("你撤回") || s.startsWith("您撤回")
+                || s.startsWith("you recalled ") || s.startsWith("you unsent ");
+    }
+
     static boolean isRecallSystemText(String s) {
         if (s == null) return false;
         String l = s.toLowerCase(java.util.Locale.US);
@@ -522,6 +532,21 @@ public class AntiRecall {
         } catch (Throwable t) {
             return "";
         }
+    }
+
+    interface RecallInitStep { void run() throws Throwable; }
+    static void installRecall(ClassLoader cl, RecallInitStep nativeStart) {
+        // Identity must be ready for the legacy Mapper even if extraction/dlopen
+        // fails. Installing the reader does not call Passport before onCreate.
+        try { RecallMessages.install(cl); }
+        catch (Throwable t) { ModuleLog.log("[fucklark] recall message hook unavailable: " + t); }
+        try { nativeStart.run(); }
+        catch (Throwable t) { ModuleLog.log("[antirecall] native start failed: " + t); }
+        try { RecallBubbleUi.install(cl); }
+        catch (Throwable t) { ModuleLog.log("[fucklark] recall bubble hook unavailable: " + t); }
+        RecallActionGuard.install(cl);
+        try { RecallTranslationUi.install(cl); }
+        catch (Throwable t) { ModuleLog.log("[fucklark] recall translation hook unavailable: " + t); }
     }
 
     static synchronized void startNative() throws Exception {
@@ -598,6 +623,28 @@ public class AntiRecall {
         Diag.w("==== 模块启动 v" + MODULE_VERSION
                 + " | 进程 " + currentProcessName() + " | abi " + android.os.Build.CPU_ABI + " ====");
 
+        RecallMessages.restoreAccounts();
+        // Install as soon as the SQLite library loads, before startup sync can
+        // overwrite retained originals. Polling alone leaves a startup gap.
+        XposedInterface.Hooker loaded = new XposedInterface.Hooker() {
+            @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                Object result = chain.proceed();
+                try {
+                    for (Object arg : chain.getArgs()) if (arg instanceof String) {
+                        String name = (String) arg;
+                        if (name.contains("wcdb") || name.contains("sqlcipher") || name.contains("lark")) {
+                            installNativeHooks();
+                            break;
+                        }
+                    }
+                } catch (Throwable ignored) {}
+                return result;
+            }
+        };
+        for (String method : new String[]{"loadLibrary0", "load0"}) try {
+            HookRuntime.hookAllMethods(Runtime.class, method, "recall.library." + method, loaded);
+        } catch (Throwable t) { ModuleLog.log("[antirecall] early library hook unavailable: " + t); }
+
         Thread t = new Thread(new Installer(), "antirecall-installer");
         t.setDaemon(true);
         // 安装轮询 + 安装成功后转入 nativeMaintain 常驻维护循环（06 文档 §3.2），无停止信号
@@ -605,20 +652,21 @@ public class AntiRecall {
         t.start();
     }
 
+    static synchronized boolean installNativeHooks() {
+        android.content.Context context = Config.appContextForSync();
+        if (context != null) TAMPER = checkSignature(context) ? 1 : 2;
+        if (TAMPER == 2) { nativeSetRecall(false); return false; }
+        return tryInstall();
+    }
+
     // 具名静态类 (d8 对匿名内部类会 NPE)
     static class Installer implements Runnable {
         @Override
         public void run() {
-            // 解析飞书版本 + 签名自校验(Application 就绪前 currentApplication()=null, 重试几次).
-            android.content.Context ctx = null;
-            for (int k = 0; k < 40; k++) {
-                try {
-                    Object app = Reflect.callStaticMethod(Class.forName("android.app.AndroidAppHelper"), "currentApplication");
-                    ctx = (android.content.Context) app;
-                } catch (Throwable ignored) {}
-                if (ctx != null) break;
-                try { Thread.sleep(250); } catch (InterruptedException e) { break; }
-            }
+            // Modern API 102 has no legacy AndroidAppHelper. Do not delay SQLite
+            // hooks while waiting for that removed helper; ActivityThread/context
+            // bridge resolves the Application, with verification retried on load.
+            android.content.Context ctx = Config.appContextForSync();
             if (ctx != null) Diag.w("飞书版本 = " + feishuVersion());
 
             // ★ 签名自校验: 被重打包(重签名)则禁用核心功能, 不装 native hook。
@@ -631,7 +679,8 @@ public class AntiRecall {
 
             for (int i = 0; i < 800; i++) {       // ~120s @150ms
                 try {
-                    if (tryInstall()) {
+                    RecallMessages.refreshAccount();
+                    if (installNativeHooks()) {
                         ModuleLog.log("[antirecall] native hook installed (after " + i + " tries)");
                         Diag.w("防撤回: sqlite3_step hook 已安装 (第 " + i + " 次尝试命中 libsqlcipher) ✓");
                         // 安装成功后转入维护循环: 周期重打被反篡改还原的 liblark hook + 轮询退群提醒.
@@ -639,6 +688,8 @@ public class AntiRecall {
                         while (true) {
                             try { Thread.sleep(150); } catch (InterruptedException e) { return; }
                             try { nativeMaintain(); } catch (Throwable e) { /* ignore */ }
+                            if (ctx == null) ctx = Config.appContextForSync();
+                            try { RecallMessages.refreshAccount(); } catch (Throwable ignored) {}
                             // 退群/被移除提醒: 取队列 -> 主线程弹 Toast (ctx = 飞书 Application)
                             if (Config.leavenotify && ctx != null) {
                                 try {
@@ -1146,7 +1197,7 @@ public class AntiRecall {
             try {
                 if (a.length >= 1 && a[0] instanceof String && !Boolean.TRUE.equals(KN_REPLAY.get())) {
                     String ch = MSG2CH.get(a[0]);
-                    if (chatKnown(ch)) triggerReply(ch);
+                    if (chatKnown(ch) && !RecallActionGuard.blockedId((String) a[0], ch)) triggerReply(ch);
                 }
             } catch (Throwable ignore) {
             }
@@ -1293,28 +1344,9 @@ public class AntiRecall {
             // proceed 固定在 try 外一次(审计 F1: 被篡改/空参等提前返回分支的 proceed 曾
             // 处于 catch 内, 异常被吞后原方法会被再执行一次)。
             try {
-                if (TAMPER != 2) {   // 被篡改则不还原撤回内容, 仅放行
-                    Object mi = chain.getArgs().get(0);
-                    if (mi != null) {
-                        Object m = Reflect.callMethod(mi, "getMessage");
-                        if (m != null) {
-                            String id = String.valueOf(Reflect.callMethod(m, "getId"));
-                            Object c = Reflect.callMethod(m, "getContent");
-                            String t = textOf(c);
-                            if (t != null && t.length() > 0) {
-                                CACHE.put(id, c);
-                            } else if (CACHE.containsKey(id)) {
-                                Object cached = CACHE.get(id);
-                                Reflect.callMethod(m, "setMessageContent", cached);
-                                if (normal != null) {
-                                    try { Reflect.callMethod(m, "setStatus", normal); } catch (Throwable ignore) {}
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (Throwable ignore) {
-            }
+                Object item = chain.getArgs().get(0);
+                if (item != null) RecallMessages.prepare(Reflect.callMethod(item, "getMessage"));
+            } catch (Throwable ignored) {}
             return chain.proceed();
         }
     }
