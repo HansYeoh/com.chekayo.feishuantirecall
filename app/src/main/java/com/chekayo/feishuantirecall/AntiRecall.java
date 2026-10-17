@@ -54,8 +54,8 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
         g_lark_mark = 0;
         return false;
     }
-    static final String MODULE_VERSION = "1.8.10";
-    static final int MODULE_VERSION_CODE = 32;   // 与 AndroidManifest versionCode 同步; 更新检查比对用
+    static final String MODULE_VERSION = "1.8.11";
+    static final int MODULE_VERSION_CODE = 33;   // 与 AndroidManifest versionCode 同步; 更新检查比对用
     static final String MAPPER = "ax2.b";
 
     // 签名自校验: 运行 APK 的证书 SHA-256(=SHA256(signature.toByteArray()))。重打包必须重签名 -> 证书变 -> 检测到篡改。
@@ -144,6 +144,8 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
                             nativeSetDiag(Config.diaglog);
                             nativeSetLeaveNotify(Config.leavenotify);
                         } catch (Throwable ignored) {}
+                    } else if (ArchiveSync.ACTION_REFRESH.equals(act)) {
+                        com.chekayo.larkresign.ResignTracker.requestRefresh("桌面刷新请求");
                     } else if (ArchiveSync.ACTION_PULL.equals(act)) {
                         // 桌面入口请求档案副本 → 推 profiles + 离职名单
                         ArchiveSync.pushAll();
@@ -153,6 +155,7 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
             android.content.IntentFilter syncFilter = new android.content.IntentFilter();
             syncFilter.addAction(Config.ACTION_SYNC);
             syncFilter.addAction(ArchiveSync.ACTION_PULL);
+            syncFilter.addAction(ArchiveSync.ACTION_REFRESH);
             // 必须 EXPORTED：发送方是模块桌面进程（另一 UID），NOT_EXPORTED 会收不到
             if (android.os.Build.VERSION.SDK_INT >= 33) {
                 c.registerReceiver(receiver, syncFilter, android.content.Context.RECEIVER_EXPORTED);
@@ -161,7 +164,7 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
             }
             XposedBridge.log("[fucklark] config bridge bound pkg=" + c.getPackageName());
             // Context 就绪后再与模块权威源对齐一次（handleLoadPackage 早期可能 context 还是 null）
-            try { Config.loadAndAnnounce(); } catch (Throwable ignored) {}
+            try { Config.loadAndAnnounce(); Config.startPolling(); } catch (Throwable ignored) {}
         } catch (Throwable t) {
             XposedBridge.log("[fucklark] config bridge bind failed: " + t);
         }
@@ -169,9 +172,9 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
 
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) {
-        installConfigBridge();
         if (!isLarkFamily(lpparam.packageName) && !isLarkApp(lpparam.classLoader)) return;
-        PKG = lpparam.packageName;   // 锁定当前目标(进程内唯一), 下游 dataDir/getPackageInfo 随之自适应
+        PKG = lpparam.packageName;
+        installConfigBridge();   // 锁定当前目标(进程内唯一), 下游 dataDir/getPackageInfo 随之自适应
 
         // ---- 0) 后台消息存档: hook 通知抓正文(所有飞书进程都装) ----
         // 通知可能由主进程或 :wschannel 进程弹 -> 每个进程各自 hook + 各自读同一份配置(同 UID 私有目录)。
@@ -188,8 +191,15 @@ public class AntiRecall implements IXposedHookLoadPackage, IXposedHookZygoteInit
         // ---- 0.5) 去除聊天水印: hook View.setForeground, 丢弃水印包的前景 drawable ----
         try { installWatermarkHook(); } catch (Throwable t) { XposedBridge.log("[fucklark] watermark init failed: " + t); }
 
+        try { BlockedContent.install(); } catch (Throwable t) { XposedBridge.log("[fucklark] content capture init failed: " + t); }
+
         // ---- 0.55) 屏蔽输入框上方「消息速览」AI 总结小提示 ----
         try { AiPeekBlock.install(); } catch (Throwable t) { XposedBridge.log("[fucklark] ai peek init failed: " + t); }
+
+        try { MessageTimeDisplay.install(lpparam.classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] message time init failed: " + t); }
+
+        // ---- 0.56) 屏蔽消息中的「相关知识」AI 推荐卡片 ----
+        try { RelatedKnowledgeBlock.install(); } catch (Throwable t) { XposedBridge.log("[fucklark] related knowledge init failed: " + t); }
 
         // ---- 0.6) 解除文件/图片下载限制: 加密聊天禁另存 -> 强制放行(按签名定位, 抗混淆) ----
         try { FileDownloadUnlock.install(lpparam.classLoader); } catch (Throwable t) { XposedBridge.log("[fucklark] download unlock init failed: " + t); }
