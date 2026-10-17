@@ -128,7 +128,7 @@ final class SettingsPanel {
         // ── 消息与隐私 ──
         box.addView(Ui.section(ctx, "消息与隐私"));
         LinearLayout c1 = Ui.card(ctx);
-        c1.addView(Ui.switchRow(ctx, "防撤回", "保留已撤回消息原文，未打开过的聊天也能救",
+        c1.addView(Ui.switchRow(ctx, "防撤回", "保留他人撤回的原文；自己的消息正常撤回",
                 Config.antirecall, new Ui.OnToggle() {
             @Override public void on(boolean b) {
                 Config.set("antirecall", b);
@@ -137,12 +137,12 @@ final class SettingsPanel {
         }));
         // ── 防撤回展示选项 ──
         c1.addView(Ui.dividerRow(ctx));
-        c1.addView(Ui.switchRow(ctx, "撤回提示", "无存档时的提示；有存档时聊天直接显示原文",
+        c1.addView(Ui.switchRow(ctx, "撤回标识", "用虚线框标记保留的原消息，不额外添加提示消息",
                 Config.showRecallHint, new Ui.OnToggle() {
             @Override public void on(boolean b) { Config.set("showRecallHint", b); }
         }));
         c1.addView(Ui.dividerRow(ctx));
-        c1.addView(Ui.navRow(ctx, "撤回提示文案",
+        c1.addView(Ui.navRow(ctx, "未保留原文时的提示文案",
                 "当前：" + Config.recallHintText, Ui.ACCENT,
                 new View.OnClickListener() {
             @Override public void onClick(View v) { showRecallHintTextEditor(ctx); }

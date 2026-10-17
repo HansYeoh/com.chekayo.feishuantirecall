@@ -5,6 +5,7 @@
 .DESCRIPTION
   自动探测 NDK / Android SDK / JDK / Keystore，无需硬编码绝对路径。
   clone 后只需系统装有这些工具即可一键构建。
+  签名路径优先级：-Keystore > KEYSTORE 环境变量 > build.local.psd1 > debug.keystore。
 
 .PARAMETER NdkPath
   手动指定 Android NDK 根目录（覆盖自动探测）
@@ -239,7 +240,27 @@ if ($NDK) {
 
 # ── 6. Keystore（签名用） ───────────────────────────────────────────
 function Find-OrCreate-Keystore {
-  if ($Keystore -and (Test-Path $Keystore)) { return $Keystore }
+  $configuredKs = $Keystore
+  if (-not $configuredKs) { $configuredKs = $env:KEYSTORE }
+  if (-not $configuredKs) {
+    $localConfigPath = Join-Path $PROJ 'build.local.psd1'
+    if (Test-Path -LiteralPath $localConfigPath -PathType Leaf) {
+      $localConfig = Import-PowerShellDataFile -LiteralPath $localConfigPath
+      $configuredKs = $localConfig.Keystore
+      if ([string]::IsNullOrWhiteSpace($configuredKs)) {
+        throw "build.local.psd1 must define a non-empty Keystore path."
+      }
+    }
+  }
+  if ($configuredKs) {
+    if (-not [System.IO.Path]::IsPathRooted($configuredKs)) {
+      $configuredKs = Join-Path $PROJ $configuredKs
+    }
+    if (-not (Test-Path -LiteralPath $configuredKs -PathType Leaf)) {
+      throw "Configured keystore not found: $configuredKs. Restore it or update the signing configuration."
+    }
+    return (Resolve-Path -LiteralPath $configuredKs).ProviderPath
+  }
 
   # 项目根目录下的 debug.keystore
   $localKs = Join-Path $PROJ 'debug.keystore'
@@ -390,6 +411,8 @@ Write-Host "`n== 7. apksigner sign =="
 & $apksigner sign --ks "$KS" --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --out "$PROJ\feishu-antirecall.apk" "$build\app-aligned.apk"
 if ($LASTEXITCODE) { throw "apksigner failed" }
 
+$verifyOutput = & $apksigner verify --print-certs "$PROJ\feishu-antirecall.apk" 2>&1
+if ($LASTEXITCODE) { throw "APK signature verification failed: $verifyOutput" }
 Write-Host "`n== DONE =="
-& $apksigner verify --print-certs "$PROJ\feishu-antirecall.apk" 2>&1 | Select-Object -First 3
+$verifyOutput | Select-Object -First 3
 "APK = $PROJ\feishu-antirecall.apk  size=$([math]::Round((Get-Item "$PROJ\feishu-antirecall.apk").Length/1KB,1))KB"

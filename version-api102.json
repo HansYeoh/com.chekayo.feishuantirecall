@@ -1,11 +1,11 @@
 {
-  "versionCode": 1031,
-  "versionName": "1.8.9-api102",
+  "versionCode": 1033,
+  "versionName": "1.8.11-api102",
   "channel": "https://t.me/fucklark",
-  "changelog": "· 预览版：从 legacy Xposed API 迁移到 libxposed API 102（单模 modern）\n· 仅供支持 libxposed API 102 的新框架（如 LSPosed v2.2+）；老 LSPosed 用户请用 legacy 稳定版\n· 功能与 legacy 版一致，native 层相同；框架交互方式全面替换\n· 感谢 HansYeoh（PR #7）",
+  "changelog": "· 适配飞书 8.2.6（8020650）：自己的消息正常撤回，他人原文保留并以灰色虚线标识，不新增提示行\n· 撤回标记按账号、会话和消息持久化；虚线跟随实际气泡轮廓，重启后保留\n· 已撤回消息限制回复、引用、转发、创建话题及表情操作，保留文档和媒体查看相关入口\n· 清理普通聊天及话题回复页的撤回翻译控件；修复 SQLite 锁竞争重试、WAL 快照和 Java 兜底初始化问题\n· 更新 8.2.6 复制、截图及媒体下载相关兼容入口\n· 仅供支持 libxposed API 102 的新框架使用；legacy 用户请继续使用稳定版\n· 感谢 @HansYeoh（PR #11）",
   "downloads": [
-    "https://github.com/haikow/com.chekayo.feishuantirecall/releases/tag/1031-1.8.9-api102",
+    "https://github.com/haikow/com.chekayo.feishuantirecall/releases/tag/1033-1.8.11-api102",
     "https://t.me/fucklark"
   ],
-  "download": "https://github.com/haikow/com.chekayo.feishuantirecall/releases/tag/1031-1.8.9-api102"
+  "download": "https://github.com/haikow/com.chekayo.feishuantirecall/releases/tag/1033-1.8.11-api102"
 }

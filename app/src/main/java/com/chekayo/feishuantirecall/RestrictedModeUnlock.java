@@ -72,20 +72,22 @@ public class RestrictedModeUnlock {
         //    (只报「会话+内容类型」, 不含正文)。保密模式复制本应被拦、不上报; 绕过后会触发这条 -> 一并掐掉。
         //    审计工具类运行时名混淆为 com.ss.android.lark.chat.utils.q(7.70), 方法 a(ActionContext, Message$Type)->void。
         //    按签名(void, 2 参, 第 2 参=Message$Type)定位并空转。跟随 Config.restrictunlock 生效。
-        try {
-            Class<?> audit = cl.loadClass("com.ss.android.lark.chat.utils.q");
+        for (String suffix : new String[]{"r", "q"}) try {
+            Class<?> audit = cl.loadClass("com.ss.android.lark.chat.utils." + suffix);
             Class<?> msgType = cl.loadClass("com.ss.android.lark.chat.entity.message.Message$Type");
+            Class<?> action = cl.loadClass("com.ss.android.lark.biz.im.extension.message_action.a");
             int hooked = 0;
             for (Method m : audit.getDeclaredMethods()) {
                 if (m.isSynthetic() || m.isBridge()) continue;
                 if (m.getReturnType() != void.class) continue;
                 Class<?>[] ps = m.getParameterTypes();
-                if (ps.length != 2 || ps[1] != msgType) continue;   // void a(ActionContext, Message$Type)
-                HookRuntime.hook(m, "restricted.copyaudit#" + hooked, VOID_GATE_RESTRICT);
+                if (ps.length != 2 || ps[0] != action || ps[1] != msgType) continue;
+                HookRuntime.hook(m, "restricted.copyaudit." + suffix + "#" + hooked, VOID_GATE_RESTRICT);
                 hooked++;
             }
-            ModuleLog.log("[fucklark] 屏蔽复制审计: CopyActionAuditUtil(q) 已 hook " + hooked
+            ModuleLog.log("[fucklark] 屏蔽复制审计: " + audit.getName() + " 已 hook " + hooked
                     + " 个方法 (进程 " + AntiRecall.currentProcessName() + ")");
+        } catch (ClassNotFoundException ignored) {
         } catch (Throwable t) {
             ModuleLog.log("[fucklark] copy-audit suppress install failed: " + t);
         }
@@ -95,18 +97,40 @@ public class RestrictedModeUnlock {
         //    onActivityResumed 里 登录 + FG("core.custom_mobile.enable_audit_device") 通过后 detector.start(activity) 起检测。
         //    直接 no-op onActivityResumed -> 检测器永不启动 -> 截图不被检测、更不上报。跟 FLAG_SECURE 无关, 与强制截图模块互补。
         //    gc6.a / onActivityResumed 均为真实运行时名(Java 类无 Kotlin 元数据)。跟随 Config.screenshotnoaudit。
-        try {
-            HookRuntime.findAndHookMethod("gc6.a", cl, "onActivityResumed",
-                    new Class<?>[]{android.app.Activity.class}, "restricted.screenshot.onActivityResumed",
+        // 8.2.6 的 ActivityObserver 为 y27.a；按完整回调签名排除旧短名复用。
+        for (String observer : new String[]{"y27.a", "gc6.a"}) try {
+            Method resumed = cl.loadClass(observer).getDeclaredMethod("onActivityResumed", android.app.Activity.class);
+            if (resumed.getReturnType() != void.class) continue;
+            HookRuntime.hook(resumed, "restricted.screenshot.onActivityResumed." + observer,
                     new XposedInterface.Hooker() {
                 @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
                     if (Config.screenshotnoaudit) return null;   // 不启动截图检测器
                     return chain.proceed();
                 }
             });
-            ModuleLog.log("[fucklark] 截图不上报: gc6.a.onActivityResumed 已 hook (进程 " + AntiRecall.currentProcessName() + ")");
+            ModuleLog.log("[fucklark] 截图不上报: " + observer + ".onActivityResumed 已 hook");
+        } catch (ClassNotFoundException | NoSuchMethodException ignored) {
         } catch (Throwable t) {
             ModuleLog.log("[fucklark] screenshot-noaudit install failed: " + t);
+        }
+
+        // 8.2.6 新增 audit-wrapper 截图路径。具名 Kotlin 回调只转发截图事件，
+        // 精确选 void invoke(Activity)，不误挂 Object 桥方法或录屏回调。
+        try {
+            Class<?> callback = cl.loadClass("com.ss.android.lark.auditsdk.screen.ScreenAuditCoordinator$screenshotManager$1");
+            Method invoke = callback.getDeclaredMethod("invoke", android.app.Activity.class);
+            if (invoke.getReturnType() == void.class && !invoke.isBridge()) {
+                HookRuntime.hook(invoke, "restricted.screenshot.coordinator", new XposedInterface.Hooker() {
+                    @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                        if (Config.screenshotnoaudit) return null;
+                        return chain.proceed();
+                    }
+                });
+                ModuleLog.log("[fucklark] 截图不上报: ScreenAuditCoordinator 截图回调已 hook");
+            }
+        } catch (ClassNotFoundException | NoSuchMethodException ignored) {
+        } catch (Throwable t) {
+            ModuleLog.log("[fucklark] screenshot coordinator install failed: " + t);
         }
 
         // ⑤ 强制截图 -> 在飞书进程内剥离 FLAG_SECURE(窗口防截图)+ SurfaceView.setSecure(安全画面), 让系统允许截图。

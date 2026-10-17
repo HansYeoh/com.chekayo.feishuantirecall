@@ -122,27 +122,20 @@ public class FileDownloadUnlock {
         // 图片: hook PhotoPickerModuleDependencyImpl.auditImageDownload(String) -> 空转
         try {
             Class<?> ppd = cl.loadClass("com.ss.android.lark.framework.assembly.photopicker.PhotoPickerModuleDependencyImpl");
-            int n = HookRuntime.hookAllMethods(ppd, "auditImageDownload", "dlunlock.auditImageDownload",
-                    new XposedInterface.Hooker() {
-                @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
-                    if (Config.downloadunlock) {
-                        if (Config.diaglog) ModuleLog.log("[fucklark] 已拦下图片审计上报: auditImageDownload("
-                                + java.util.Arrays.toString(chain.getArgs().toArray()) + ")");
-                        return null;
-                    }
-                    return chain.proceed();
-                }
-            }).size();
-            ModuleLog.log("[fucklark] 屏蔽下载审计: PhotoPickerModuleDependencyImpl.auditImageDownload 已 hook " + n + " 个");
+            int n = hookNamedVoidMethods(ppd, "auditImageDownload") + hookNamedVoidMethods(ppd, "auditMediaDownload");
+            ModuleLog.log("[fucklark] 屏蔽下载审计: PhotoPickerModuleDependencyImpl 已 hook " + n + " 个");
         } catch (Throwable t) {
             ModuleLog.log("[fucklark] download-audit suppress(image) install failed: " + t);
         }
         // 总出口(双保险): 存图/存视频的所有路径(PhotoPicker / ChatAuditDependency 等)最终都汇到审计服务
         // y33.a.a().auditImageDownload / auditMediaDownload。hook 访问器 y33.a.a() 发现服务实例, 按未混淆名空转其
         // auditImageDownload / auditMediaDownload -> 一网打尽。仅 7.70 定位(y33.a 混淆名; 方法名未混淆)。
-        try {
-            Class<?> y33a = cl.loadClass("y33.a");
-            HookRuntime.hookAllMethods(y33a, "a", "dlunlock.svcaccessor",
+        // 8.2.6: yo3.a。旧短名仍可能存在但已代表无关类，必须验证服务接口。
+        for (String accessorName : new String[]{"yo3.a", "y33.a"}) try {
+            Class<?> accessor = cl.loadClass(accessorName);
+            Method entry = auditAccessor(accessor);
+            if (entry == null) continue;
+            HookRuntime.hook(entry, "dlunlock.svcaccessor." + accessorName,
                     new XposedInterface.Hooker() {
                 @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
                     Object svc = chain.proceed();
@@ -156,18 +149,36 @@ public class FileDownloadUnlock {
                     return svc;
                 }
             });
-            ModuleLog.log("[fucklark] 屏蔽下载审计: 已挂审计服务访问器 y33.a.a (进程 " + AntiRecall.currentProcessName() + ")");
+            ModuleLog.log("[fucklark] 屏蔽下载审计: 已挂审计服务访问器 " + accessorName);
+        } catch (ClassNotFoundException ignored) {
         } catch (Throwable t) {
             ModuleLog.log("[fucklark] download-audit suppress(sink) install failed: " + t);
         }
     }
 
+    static Method auditAccessor(Class<?> type) {
+        Method found = null;
+        for (Method m : type.getDeclaredMethods()) {
+            if (m.isBridge() || m.isSynthetic() || !Modifier.isStatic(m.getModifiers())
+                    || m.getParameterTypes().length != 0) continue;
+            try {
+                if (m.getReturnType().getMethod("auditImageDownload", String.class).getReturnType() != void.class
+                        || m.getReturnType().getMethod("auditMediaDownload", String.class).getReturnType() != void.class) continue;
+            } catch (NoSuchMethodException ignored) { continue; }
+            if (found != null) return null;
+            found = m;
+        }
+        return found;
+    }
+
     // 空转某类中所有指定名字的方法(存图/存视频审计), 返回挂上的数量。
     static int hookNamedVoidMethods(Class<?> c, final String name) {
         int n = 0;
-        for (Method m : c.getDeclaredMethods()) {
+        for (Method m : c.getMethods()) {
             if (m.isSynthetic() || m.isBridge()) continue;
-            if (!m.getName().equals(name)) continue;
+            if (!m.getName().equals(name) || m.getReturnType() != void.class
+                    || Modifier.isAbstract(m.getModifiers())
+                    || m.getParameterTypes().length != 1 || m.getParameterTypes()[0] != String.class) continue;
             HookRuntime.hook(m, auditId("dlunlock.svcaudit", c, m), new XposedInterface.Hooker() {
                 @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
                     if (Config.downloadunlock) {

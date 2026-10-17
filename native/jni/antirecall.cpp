@@ -1,7 +1,6 @@
 // 飞书防撤回 —— 原生 SQL 层 (libsqlcipher.so) inline hook
 // 机制(已验证): 撤回 = REPLACE INTO `messages` 且 is_recalled=1, content 被清空。
-// 对策: 该写入即将执行时把 id+chat_id 改绑成哨兵(1,1), 真正的原始行(收信时已入库,
-//       content 完整, is_recalled=0)原封不动 -> 打开聊天即见原文。免电脑、免 frida。
+// 对策: 自己的消息正常落库；他人的原文保留，撤回标记单独持久化，供原气泡绘制虚线。
 //
 // 符号解析不走 dlopen/dlsym: 模块经 System.load 进的是 app classloader-namespace,
 // 与 app 自己加载的 libsqlcipher 不在同一 linker namespace, dlopen(RTLD_NOLOAD) 看不到。
@@ -26,6 +25,7 @@
 #include <errno.h>
 #include <android/log.h>
 #include "And64InlineHook.hpp"
+#include "recall_filter.h"
 
 #define TAG "antirecall-native"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
@@ -100,6 +100,8 @@ typedef long long   (*coli64_t)(void*, int);
 typedef const void* (*colblob_t)(void*, int);
 typedef int         (*colbytes_t)(void*, int);
 typedef void*       (*dbhandle_t)(void*);
+typedef const char* (*dbfilename_t)(void*, const char*);
+typedef int         (*autocommit_t)(void*);
 
 // ── sqlite provider ──────────────────────────────────────────────────────
 // 飞书 8.x 起消息库改走 libwcdb2.so 自带的 sqlite(260 个导出符号), libsqlcipher.so 只服务
@@ -124,7 +126,29 @@ struct SqlProv {
     coli64_t   col_i64;
     colblob_t  col_blob;
     colbytes_t col_bytes;
+    dbfilename_t db_filename;
+    autocommit_t autocommit;
+    const char* (*error)(void*);
+    void* (*next_stmt)(void*, void*);
+    int (*busy)(void*);
+    int (*reset)(void*);
+    void* (*db_mutex)(void*);
+    void (*mutex_enter)(void*);
+    void (*mutex_leave)(void*);
 };
+static recall::Store g_recall_store;
+// Bounded diagnostics contain stages/errors only, never message content or IDs.
+static void recall_trace(const char *stage) {
+    static std::mutex mutex;
+    static std::set<std::string> seen;
+    std::lock_guard<std::mutex> guard(mutex);
+    if (seen.size() < 32 && seen.insert(stage).second) LOGI("RECALL-STATE: %s", stage);
+}
+static recall::Api recall_api(SqlProv *p) {
+    return {p->orig_step, p->prepare, p->finalize, p->col_i64, p->db_filename, p->autocommit, p->error, recall_trace,
+        p->next_stmt, p->busy, p->reset,
+        p->db_mutex, p->mutex_enter, p->mutex_leave};
+}
 static SqlProv g_prov[2] = {
     { "libwcdb2.so" },       // 8.x 消息库(优先; 7.x 无此库则恒未装, 无害)
     { "libsqlcipher.so" },   // 7.x 消息库 + 8.x 旧组件库
@@ -140,7 +164,6 @@ static volatile int g_export_pending = 0;      // 1=待在 messages 连接上导
 #define SQLITE_TRANSIENT ((void*)-1)
 static volatile int g_neutralized = 0;
 static volatile int g_recall_enabled = 1;   // fuck lark 开关: 0=停用防撤回中和(设置面板可切)
-static volatile int g_recall_drop = 0;       // 0=持久提示(id+cid双改绑,原文+撤回提示并存); 1=纯丢弃(仅原文)
 static volatile int g_keep_kicked = 0;       // 1=保留被踢群聊天记录(拦清群 DELETE + 窗口内拦删消息)
 static volatile long long g_kick_window = 0; // 整群拆除信号后开的丢弃窗口(ms 时间戳): 窗口内的 DELETE FROM messages 丢弃
 // ── 退群/被移除 提醒 ──
@@ -422,14 +445,6 @@ static bool feed_parse(const char *e, uint64_t *id, long long *nmc) {
         }
     }
     return gotid && gotn;
-}
-
-// 撤回写入判定: expanded SQL 的 VALUES 中 is_recalled 字段(列位自适应)值为 1。
-static int recall_is_one(const char *expanded) {
-    const char *fs = nullptr, *fe = nullptr;
-    if (!values_field(expanded, g_mc.recalled, &fs, &fe)) return 0;
-    while (fs < fe && *fs == ' ') fs++;
-    return (fs < fe && *fs == '1') ? 1 : 0;
 }
 
 static void dump_bt(const char *what, unsigned a1);   // 前向声明(定义在下方)
@@ -719,6 +734,8 @@ static volatile int g_read_sql_diag = 0;   // 探测已完成, 关闭
 // 共用下面这套逻辑; 语句/句柄只配本库符号(两库 sqlite3_stmt 布局不通用)。
 static int step_common(SqlProv *pv, void *stmt) {
     const char *t = pv->sql ? pv->sql(stmt) : nullptr;
+    const char *recallCols = nullptr;
+    if (t && is_msg_replace(t, &recallCols)) adapt_msg_cols(t, recallCols);
     // ── 防已读探测: 抓所有涉及 me_read / read 的 SELECT(去重, 只记不同模板) ──
     //   目的: 看读回执发送前, async 是否从 sqlite 取"要标已读的 message_id 列表"。
     if (g_read_sql_diag && t &&
@@ -984,83 +1001,19 @@ static int step_common(SqlProv *pv, void *stmt) {
             }
         }
     }
-    bool drop_recall = false;
-    if (g_recall_enabled && t) {
-        const char *mcols = nullptr;
-        if (is_msg_replace(t, &mcols)) {
-            if (g_msg_pv == nullptr) {
-                g_msg_pv = pv;   // 诊断: 确认本机消息库走哪个 provider(8.x=wcdb2 / 7.x=sqlcipher)
-                LOGI("ANTIRECALL: messages 语句经 %s (provider 确定)", pv->so);
-                flog("防撤回: 消息库 provider = %s", pv->so);
+    if (g_recall_enabled && t && pv->exp && pv->db_handle
+            && strstr(t, "messages")) {
+        char *expanded = pv->exp(stmt);
+        if (expanded) {
+            int result = g_recall_store.filter(recall_api(pv), pv, pv->db_handle(stmt), expanded, stmt);
+            pv->free_fn(expanded);
+            if (result != recall::PASS) {
+                if (result == recall::DONE) {
+                    int n = ++g_neutralized;
+                    flog("防撤回: 撤回写入已处理 累计=%d", n);
+                }
+                return result;
             }
-            adapt_msg_cols(t, mcols);   // 列位自适应(8.x 起 SQL 运行时拼接, 列序可能已变)
-            char *e = pv->exp ? pv->exp(stmt) : nullptr;
-            if (e) {
-                if (recall_is_one(e)) {
-                    // 解析原 message id(id 列位与 is_recalled 判定同一条语句)
-                    const char *ifs = nullptr, *ife = nullptr;
-                    long long oid = values_field(e, g_mc.id, &ifs, &ife) ? field_ll(ifs, ife) : 0;
-                    if (oid > 0 && g_recall_drop == 0 && pv->bind_text && g_mc.cid >= 0) {
-                        // 方案3(7.70.x 持续提示): 撤回行改 id + cid 双改绑成唯一值 => 不撞 messages 唯一索引
-                        //   (cid / (chat_id,position) 任一为 unique 时, 旧的只改 id 会因 cid 相同连带删原行)。
-                        //   原行(is_recalled=0,内容完整)与撤回行(is_recalled=1)并存 -> 既见原文又见"撤回了一条消息"。
-                        long long nid = oid ^ 0x4000000000000000LL;
-                        pv->bind64(stmt, g_mc.id + 1, nid);
-                        char cidbuf[24]; snprintf(cidbuf, sizeof cidbuf, "ar%lld", nid);
-                        pv->bind_text(stmt, g_mc.cid + 1, cidbuf, -1, SQLITE_TRANSIENT);
-                        int n = ++g_neutralized;
-                        LOGI("ANTIRECALL: 撤回→持久提示 oid=%lld nid=%lld cid=%s (total=%d)", oid, nid, cidbuf, n);
-                        flog_recall(oid, n, "id+cid改绑");
-                    } else {
-                        // 兜底: 直接丢弃撤回写入(原文保留, 无持久提示)
-                        drop_recall = true;
-                        int n = ++g_neutralized;
-                        LOGI("ANTIRECALL: 撤回写入已丢弃(原文保留) oid=%lld (total=%d)", oid, n);
-                        flog_recall(oid, n, "丢弃撤回写入");
-                    }
-                }
-                // 防已读破时序: 消息入库即提前追 message_id(id 列), 远早于读 -> 回执发出时已在监视.
-                if (g_stealth_read) {
-                    const char *ifs = nullptr, *ife = nullptr;
-                    if (values_field(e, g_mc.id, &ifs, &ife)) {
-                        long long mid = field_ll(ifs, ife);
-                        if (mid > 0) watch_add((uint64_t) mid);
-                    }
-                }
-                pv->free_fn(e);
-            }
-            if (drop_recall) return 101;   // SQLITE_DONE: 谎报"写入完成", 实际不执行, 原行保留
-        }
-        // 兜底: 若飞书把撤回改成 UPDATE `messages` SET ... is_recalled=1(不再走 REPLACE),
-        //   丢弃该 UPDATE -> 原行(原文完整)保留。SET 参数序无需解析, 丢弃即可。
-        if (!drop_recall && strncmp(t, "UPDATE `messages`", 17) == 0 && strstr(t, "is_recalled") && pv->exp) {
-            char *e = pv->exp(stmt);
-            if (e) {
-                // 只认 SET 子句(WHERE 前)里 is_recalled 被赋 1 的语句, 误伤面最小
-                const char *we = strstr(e, "WHERE");
-                int setlen = we ? (int) (we - e) : (int) strlen(e);
-                const char *ir = nullptr;
-                for (const char *q = e; (q = strstr(q, "is_recalled")) && !ir; ) {
-                    if (q < e + setlen) ir = q;      // 取 SET 段内第一处 is_recalled
-                    q += 11;
-                }
-                if (ir) {
-                    const char *q = ir + 11;
-                    while (*q == ' ' || *q == '`') q++;
-                    if (*q == '=') {
-                        q++;
-                        while (*q == ' ') q++;
-                        if (*q == '1') {
-                            drop_recall = true;
-                            int n = ++g_neutralized;
-                            LOGI("ANTIRECALL: UPDATE形撤回已丢弃(原文保留) (total=%d)", n);
-                            flog_recall(0, n, "UPDATE形撤回丢弃");
-                        }
-                    }
-                }
-                pv->free_fn(e);
-            }
-            if (drop_recall) return 101;
         }
     }
     // 防已读 中和 (手册稳定存储层咽喉): UPDATE `messages` SET `me_read` = ? WHERE id IN (?)
@@ -1143,8 +1096,21 @@ static int step_common(SqlProv *pv, void *stmt) {
     }
     return pv->orig_step(stmt);
 }
-static int my_step_wcdb(void *stmt)   { return step_common(&g_prov[0], stmt); }
-static int my_step_cipher(void *stmt) { return step_common(&g_prov[1], stmt); }
+// A snapshot is published only after commit. ROLLBACK/SAVEPOINT paths are
+// observed too, so the UI never needs to retain or use a SQLite connection.
+static int step_observed(SqlProv *pv, void *stmt) {
+    bool observe = pv->db_handle && pv->db_filename && pv->autocommit && pv->prepare && pv->finalize && pv->col_i64;
+    const char *sql = pv->sql ? pv->sql(stmt) : nullptr;
+    bool messages = sql && strstr(sql, "messages");
+    // A SELECT may return one row then be finalized without another step. Read
+    // pending markers BEFORE the next cursor starts as well as after commit.
+    if (observe) g_recall_store.observe(recall_api(pv), pv, pv->db_handle(stmt), messages);
+    int result = step_common(pv, stmt);
+    if (observe) g_recall_store.observe(recall_api(pv), pv, pv->db_handle(stmt), messages);
+    return result;
+}
+static int my_step_wcdb(void *stmt)   { return step_observed(&g_prov[0], stmt); }
+static int my_step_cipher(void *stmt) { return step_observed(&g_prov[1], stmt); }
 
 // 在 /proc/self/maps 里找 so 的加载基址: 取【文件偏移=0 且以 ELF magic 开头】的映射
 static uintptr_t find_base(const char *name) {
@@ -1752,6 +1718,29 @@ Java_com_chekayo_feishuantirecall_AntiRecall_nativeMaintain(JNIEnv *, jclass) {
 
 // fuck lark 设置面板: 实时开关防撤回中和
 extern "C" JNIEXPORT void JNICALL
+Java_com_chekayo_feishuantirecall_AntiRecall_nativeBindRecallAccount(JNIEnv *env, jclass, jstring uid, jstring storage) {
+    if (!uid || !storage) return;
+    const char *u = env->GetStringUTFChars(uid, nullptr);
+    if (!u) return;
+    const char *s = env->GetStringUTFChars(storage, nullptr);
+    if (s) {
+        recall::bindOwner(s, u);
+        env->ReleaseStringUTFChars(storage, s);
+    }
+    env->ReleaseStringUTFChars(uid, u);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_chekayo_feishuantirecall_AntiRecall_nativeIsRecallMarked(JNIEnv *env, jclass, jstring uid, jlong chat, jlong id) {
+    if (!uid) return JNI_FALSE;
+    const char *s = env->GetStringUTFChars(uid, nullptr);
+    if (!s) return JNI_FALSE;
+    bool marked = g_recall_store.contains(s, chat, id);
+    env->ReleaseStringUTFChars(uid, s);
+    return marked ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_chekayo_feishuantirecall_AntiRecall_nativeSetRecall(JNIEnv *, jclass, jboolean on) {
     g_recall_enabled = on ? 1 : 0;
 }
@@ -1799,6 +1788,8 @@ Java_com_chekayo_feishuantirecall_AntiRecall_nativePollLeaveEvent(JNIEnv *env, j
 // 尝试给一个 provider 解析符号并 hook 其 sqlite3_step。
 // 库未加载 -> false(下次再试); 符号不全 -> 标记放弃; 成功 -> installed。
 static bool try_prov(SqlProv *p) {
+    static std::mutex install_mutex;
+    std::lock_guard<std::mutex> guard(install_mutex);
     if (p->installed || p->gave_up) return p->installed;
     uintptr_t base = find_base(p->so);
     if (!base) return false;
@@ -1810,6 +1801,15 @@ static bool try_prov(SqlProv *p) {
     p->bind_blob = (bindblob_t)resolve(base, "sqlite3_bind_blob");
     p->bind_text = (bindtext_t)resolve(base, "sqlite3_bind_text");
     p->db_handle = (dbhandle_t)resolve(base, "sqlite3_db_handle");
+    p->db_filename = (dbfilename_t)resolve(base, "sqlite3_db_filename");
+    p->autocommit = (autocommit_t)resolve(base, "sqlite3_get_autocommit");
+    p->error = (const char* (*)(void*))resolve(base, "sqlite3_errmsg");
+    p->next_stmt = (void* (*)(void*, void*))resolve(base, "sqlite3_next_stmt");
+    p->busy = (int (*)(void*))resolve(base, "sqlite3_stmt_busy");
+    p->reset = (int (*)(void*))resolve(base, "sqlite3_reset");
+    p->db_mutex = (void* (*)(void*))resolve(base, "sqlite3_db_mutex");
+    p->mutex_enter = (void (*)(void*))resolve(base, "sqlite3_mutex_enter");
+    p->mutex_leave = (void (*)(void*))resolve(base, "sqlite3_mutex_leave");
     p->prepare   = (prepare_t) resolve(base, "sqlite3_prepare_v2");
     p->finalize  = (finalize_t)resolve(base, "sqlite3_finalize");
     p->col_i64   = (coli64_t)  resolve(base, "sqlite3_column_int64");

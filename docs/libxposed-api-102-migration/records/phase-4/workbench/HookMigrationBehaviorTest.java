@@ -28,7 +28,7 @@ import java.util.List;
  *    失败批次并入恢复（审计 P2-2）、降级保留未补齐（审计 P2-4）、调度失败归还（审计 P2-6）、
  *    线程槽 finally 恢复（审计 P2-5）、回复窗口按会话隔离（审计 P1）。
  * 3. InvokeHook（ANTIREAD_DROP=false 现状）：任何命令都放行原调用，不短路。
- * 4. MapperHook（before 反射改对象）：文本入缓存；空文本时回填缓存内容 + 恢复 NORMAL 状态。
+ * 4. MapperHook：仅缓存身份完整的他人消息，实际撤回后回填原文并恢复 NORMAL 状态。
  * 5. RestrictedModeUnlock 共享门禁回调：开关开 -> 短路（boolean=false / void=null，原方法不执行）；
  *    开关关 -> proceed。
  * 6. 注册面：全部经 HookRuntime，幂等键去重（同 logicalId 二次安装 0 新框架安装）。
@@ -115,12 +115,18 @@ public class HookMigrationBehaviorTest {
         public String getText() { return text; }
     }
 
+    public enum FakeStatus { NORMAL, DELETED }
     public static class FakeMessage {
         Object content;
-        Object status;
+        Object status = FakeStatus.NORMAL;
         boolean contentSet;
         boolean statusSet;
         public Object getId() { return "111"; }
+        public String getChatId() { return "50"; }
+        public String getFromId() { return "2002"; }
+        public boolean isFromMe() { return false; }
+        public boolean isRecalled() { return status == FakeStatus.DELETED; }
+        public Object getStatus() { return status; }
         public Object getContent() { return content; }
         public void setMessageContent(Object c) { contentSet = true; this.content = c; }
         public void setStatus(Object s) { statusSet = true; this.status = s; }
@@ -257,18 +263,23 @@ public class HookMigrationBehaviorTest {
         check(c5b.proceedCount == 1, "InvokeHook(10000 噪音)：仍放行原调用");
 
         // ── 6. MapperHook：文本入缓存；空文本回填缓存 + 恢复状态 ──
-        AntiRecall.CACHE.clear();
-        Object normal = new Object();   // Message$Status.NORMAL 替身
+        RecallMessages.clear();
+        RecallMessages.accountReader = new RecallMessages.AccountReader() {
+            public String read() { return "1001"; }
+        };
+        RecallMessages.applicationReady = true;
+        Config.antirecall = true;
+        Object normal = FakeStatus.NORMAL;
         AntiRecall.MapperHook mapper = new AntiRecall.MapperHook(normal);
         FakeMessage m1 = new FakeMessage();
         m1.content = new FakeContent("hello");
         FakeChain c6 = new FakeChain(readReqCtor, null, new Object[]{ new FakeMsgItem(m1) }, null);
         mapper.intercept(c6);
-        check(AntiRecall.CACHE.get("111") == m1.content && c6.proceedCount == 1,
-                "MapperHook：有文本 -> 入缓存且原方法执行");
+        check(m1.content != null && !m1.contentSet && c6.proceedCount == 1,
+                "MapperHook：正常消息原文不变且原方法执行");
         FakeMessage m2 = new FakeMessage();
-        m2.content = new FakeContent(null);
-        AntiRecall.CACHE.put("111", m1.content);   // 确保缓存命中
+        m2.content = null;
+        m2.status = FakeStatus.DELETED;
         FakeChain c6b = new FakeChain(readReqCtor, null, new Object[]{ new FakeMsgItem(m2) }, null);
         mapper.intercept(c6b);
         check(m2.contentSet && m2.content == m1.content && m2.statusSet && m2.status == normal,
@@ -762,7 +773,8 @@ public class HookMigrationBehaviorTest {
         // ── 收尾：还原全局状态，避免影响同 JVM 其它用例 ──
         Config.antiread = false;
         AntiRecall.READ_WINDOWS.clear();
-        AntiRecall.CACHE.clear();
+        RecallMessages.clear();
+        RecallMessages.accountReader = null;
         AntiRecall.PENDING_READ.clear();
         AntiRecall.KN_STATE.clear();
         AntiRecall.MSG2CH.clear();

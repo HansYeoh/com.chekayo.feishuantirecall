@@ -49,7 +49,7 @@ public class Config {
     public static volatile int dismissedUpc = 0;         // 已忽略的更新 versionCode(× 关闭后记住, 不再唠叨)
     public static volatile boolean blockaipeek = true;   // 屏蔽 AI 总结「消息速览」浮层（整条）
     // ── 防撤回展示选项 ──
-    public static volatile boolean showRecallHint = true;      // 是否展示「xxx撤回了一条消息」提示
+    public static volatile boolean showRecallHint = true;      // 原气泡撤回标记（兼容旧版配置键）
     public static volatile boolean recallHintOriginal = true;  // 撤回提示是否附带原文
     public static volatile String recallHintText = "撤回了一条消息"; // 可自定义提示文案（可用 {name} 代表发送人）
 
@@ -62,12 +62,12 @@ public class Config {
     /** 保存应用级 Context，用于向飞书进程发送配置同步广播。 */
     public static void setContext(Context c) { if (c != null) appContext = c.getApplicationContext(); }
 
-    /** 供 ArchiveSync 等取 Context（可能尚未 setContext，则回落 AndroidAppHelper）。 */
+    /** 供 ArchiveSync 等取 Context；API 102 下回落平台 ActivityThread，不依赖旧版 Xposed helper。 */
     static Context appContextForSync() {
         Context c = appContext;
         if (c != null) return c;
         try {
-            Object app = Class.forName("android.app.AndroidAppHelper")
+            Object app = Class.forName("android.app.ActivityThread")
                     .getMethod("currentApplication").invoke(null);
             if (app instanceof Context) {
                 setContext((Context) app);

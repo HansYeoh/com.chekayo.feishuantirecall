@@ -6,6 +6,7 @@ build/
 # 签名私钥 —— 绝不入库（build.sh 会在缺失时自动生成本地 debug.keystore）
 *.keystore
 *.jks
+build.local.psd1
 
 # 逆向分析的目标二进制 / APK（版权 + 可能含账号数据）
 *_base.apk
@@ -25,6 +26,7 @@ profiles*.json
 
 # 运行期日志与缓存
 *.log
+tmp-out/
 __pycache__/
 *.pyc
 
